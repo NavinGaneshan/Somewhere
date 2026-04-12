@@ -1,0 +1,117 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Helper functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ['admin', 'moderator'];
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isBanned() {
+      return isAuthenticated() &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.isBanned == true;
+    }
+
+    // ========================================================
+    // USERS
+    // ========================================================
+    match /users/{userId} {
+      // Users can read their own profile; admins can read all
+      allow read: if isOwner(userId) || isAdmin();
+
+      // Users can create/update their own profile (not role or banned fields)
+      allow create: if isOwner(userId) && !isBanned();
+      allow update: if (isOwner(userId) && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['role', 'isBanned'])) || isAdmin();
+
+      // Only admins can delete
+      allow delete: if isAdmin();
+    }
+
+    // ========================================================
+    // VENUES
+    // ========================================================
+    match /venues/{venueId} {
+      // Anyone can read venues (including unauthenticated for map viewing)
+      allow read: if true;
+
+      // Only authenticated non-banned users can create venues
+      allow create: if isAuthenticated() && !isBanned();
+
+      // Updates: authenticated users can update limited fields; admins can update all
+      allow update: if isAdmin() ||
+        (isAuthenticated() && !isBanned() &&
+         !request.resource.data.diff(resource.data).affectedKeys().hasAny(['isPermanentlyClosed', 'scanStatus']));
+
+      // Only admins can delete
+      allow delete: if isAdmin();
+    }
+
+    // ========================================================
+    // DEALS
+    // ========================================================
+    match /deals/{dealId} {
+      // Authenticated users can read active deals
+      allow read: if isAuthenticated() || resource.data.status == 'active';
+
+      // Authenticated non-banned users can create deals
+      allow create: if isAuthenticated() && !isBanned() &&
+        request.resource.data.createdBy == request.auth.uid;
+
+      // Users can update their own deals (limited fields); admins update all
+      allow update: if isAdmin() ||
+        (isAuthenticated() && !isBanned() &&
+         resource.data.createdBy == request.auth.uid &&
+         !request.resource.data.diff(resource.data).affectedKeys().hasAny(['status', 'isVerified', 'adminNotes']));
+
+      // Users can delete their own pending deals; admins delete any
+      allow delete: if isAdmin() ||
+        (isAuthenticated() && resource.data.createdBy == request.auth.uid && resource.data.status == 'pending');
+    }
+
+    // ========================================================
+    // PVA CELLS
+    // ========================================================
+    match /pvaCells/{cellId} {
+      // Public read (for map overlays)
+      allow read: if true;
+
+      // Only Cloud Functions and admins write PVA cells
+      allow write: if isAdmin();
+    }
+
+    // ========================================================
+    // CONFIG (admin only)
+    // ========================================================
+    match /config/{configId} {
+      allow read: if isAdmin() || configId == 'pva';  // PVA config readable for app-level throttling
+      allow write: if isAdmin();
+    }
+
+    // ========================================================
+    // SEARCH LOGS (admin only)
+    // ========================================================
+    match /searchLogs/{logId} {
+      allow read: if isAdmin();
+      allow create: if isAuthenticated();  // App writes search logs
+      allow update, delete: if isAdmin();
+    }
+
+    // ========================================================
+    // WEBSITE SCAN QUEUE (Cloud Functions write, admin read)
+    // ========================================================
+    match /websiteScanQueue/{itemId} {
+      allow read: if isAdmin();
+      allow create: if isAuthenticated();
+      allow update, delete: if isAdmin();
+    }
+  }
+}

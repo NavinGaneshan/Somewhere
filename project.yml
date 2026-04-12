@@ -1,0 +1,104 @@
+name: Somewhere
+options:
+  bundleIdPrefix: com.hhsomewhere
+  deploymentTarget:
+    iOS: "16.0"
+  defaultConfig: Debug
+  xcodeVersion: "15.0"
+  groupSortPosition: top
+  generateEmptyDirectories: true
+  indentWidth: 4
+  tabWidth: 4
+
+configs:
+  Debug: debug
+  Release: release
+
+settings:
+  base:
+    SWIFT_VERSION: "5.9"
+    MARKETING_VERSION: "1.0.0"
+    CURRENT_PROJECT_VERSION: "1"
+    DEVELOPMENT_TEAM: ""  # Set your Apple Developer Team ID
+    CODE_SIGN_STYLE: Automatic
+
+targets:
+  Somewhere:
+    type: application
+    platform: iOS
+    deploymentTarget: "16.0"
+    sources:
+      - path: Somewhere
+        excludes:
+          - "**/*.md"
+    resources:
+      - path: Somewhere/Resources
+      - path: Somewhere/GoogleService-Info.plist
+        optional: true
+    info:
+      path: Somewhere/Resources/Info.plist
+      properties:
+        CFBundleName: Somewhere
+        CFBundleDisplayName: Somewhere
+        CFBundleIdentifier: com.hhsomewhere.app
+        CFBundleVersion: "1"
+        CFBundleShortVersionString: "1.0.0"
+        UILaunchStoryboardName: LaunchScreen
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
+        NSLocationWhenInUseUsageDescription: "Somewhere needs your location to find happy hour deals near you."
+        NSLocationAlwaysAndWhenInUseUsageDescription: "Somewhere uses your location to find happy hour deals near you."
+        NSCameraUsageDescription: "Somewhere uses your camera to scan menus and signs for happy hour deals."
+        NSPhotoLibraryUsageDescription: "Somewhere accesses your photos to scan for happy hour deals."
+        UIBackgroundModes:
+          - location
+        LSApplicationQueriesSchemes:
+          - comgooglemaps
+          - googlemaps
+        CFBundleURLTypes:
+          - CFBundleURLSchemes:
+              - com.googleusercontent.apps.YOUR_REVERSED_CLIENT_ID  # Replace with actual
+        GIDClientID: "YOUR_GOOGLE_CLIENT_ID"  # Replace with actual
+        GOOGLE_PLACES_API_KEY: "YOUR_PLACES_API_KEY"  # Replace with actual
+        ITSAppUsesNonExemptEncryption: false
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.hhsomewhere.app
+        INFOPLIST_FILE: Somewhere/Resources/Info.plist
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: ""
+      configs:
+        Debug:
+          SWIFT_ACTIVE_COMPILATION_CONDITIONS: DEBUG
+          DEBUG_INFORMATION_FORMAT: dwarf
+          SWIFT_OPTIMIZATION_LEVEL: "-Onone"
+        Release:
+          SWIFT_ACTIVE_COMPILATION_CONDITIONS: ""
+          DEBUG_INFORMATION_FORMAT: dwarf-with-dsym
+          SWIFT_OPTIMIZATION_LEVEL: "-O"
+    dependencies:
+      - sdk: CoreLocation.framework
+      - sdk: MapKit.framework
+      - sdk: Vision.framework
+      - sdk: PhotosUI.framework
+      - sdk: AuthenticationServices.framework
+      - pod: FirebaseAuth
+      - pod: FirebaseFirestore
+      - pod: FirebaseStorage
+      - pod: FirebaseFunctions
+      - pod: FirebaseAnalytics
+      - pod: FirebaseAppCheck
+      - pod: GoogleSignIn
+      - pod: GooglePlaces
+      - pod: SDWebImageSwiftUI
+
+  SomewhereTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - SomewhereTests
+    dependencies:
+      - target: Somewhere
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.hhsomewhere.tests
