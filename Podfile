@@ -29,5 +29,16 @@ post_install do |installer|
       config.build_settings['SWIFT_VERSION'] = '5.9'
       config.build_settings['BUILD_LIBRARY_FOR_DISTRIBUTION'] = 'NO'
     end
+
+    # Fix BoringSSL-GRPC unsupported '-O' flag error with Xcode 15+
+    if target.name == 'BoringSSL-GRPC'
+      target.source_build_phase.files.each do |file|
+        if file.settings && file.settings['COMPILER_FLAGS']
+          flags = file.settings['COMPILER_FLAGS'].split
+          flags.reject! { |flag| flag == '-O' }
+          file.settings['COMPILER_FLAGS'] = flags.join(' ')
+        end
+      end
+    end
   end
 end
