@@ -82,15 +82,6 @@ targets:
       - sdk: Vision.framework
       - sdk: PhotosUI.framework
       - sdk: AuthenticationServices.framework
-      - pod: FirebaseAuth
-      - pod: FirebaseFirestore
-      - pod: FirebaseStorage
-      - pod: FirebaseFunctions
-      - pod: FirebaseAnalytics
-      - pod: FirebaseAppCheck
-      - pod: GoogleSignIn
-      - pod: GooglePlaces
-      - pod: SDWebImageSwiftUI
 
   SomewhereTests:
     type: bundle.unit-test
