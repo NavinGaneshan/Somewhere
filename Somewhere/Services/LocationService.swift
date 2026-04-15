@@ -1,6 +1,7 @@
 import Foundation
 import CoreLocation
 import Combine
+import UIKit
 
 // MARK: - Location Error
 enum LocationError: LocalizedError {
@@ -90,21 +91,25 @@ class LocationService: NSObject, ObservableObject {
             }
         }
 
-        return try await withCheckedThrowingContinuation { [weak self] continuation in
-            guard let self = self else {
-                continuation.resume(throwing: LocationError.locationUnavailable)
-                return
-            }
+        return try await withCheckedThrowingContinuation { continuation in
+            MainActor.assumeIsolated { [weak self] in
+                guard let self = self else {
+                    continuation.resume(throwing: LocationError.locationUnavailable)
+                    return
+                }
 
-            self.locationContinuation = continuation
-            self.isLocating = true
-            self.locationManager.requestLocation()
+                self.locationContinuation = continuation
+                self.isLocating = true
+                self.locationManager.requestLocation()
 
-            // Timeout
-            self.locationUpdateTimer = Timer.scheduledTimer(withTimeInterval: timeout, repeats: false) { [weak self] _ in
-                self?.locationContinuation?.resume(throwing: LocationError.timeout)
-                self?.locationContinuation = nil
-                self?.isLocating = false
+                // Timeout
+                self.locationUpdateTimer = Timer.scheduledTimer(withTimeInterval: timeout, repeats: false) { [weak self] _ in
+                    Task { @MainActor [weak self] in
+                        self?.locationContinuation?.resume(throwing: LocationError.timeout)
+                        self?.locationContinuation = nil
+                        self?.isLocating = false
+                    }
+                }
             }
         }
     }
