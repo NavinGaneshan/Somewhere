@@ -31,6 +31,7 @@ post_install do |installer|
     end
 
     # Fix unsupported '-O' flag in all pods (BoringSSL, abseil, leveldb) for Xcode 15+
+    next unless target.respond_to?(:source_build_phase)
     target.source_build_phase.files.each do |file|
       if file.settings && file.settings['COMPILER_FLAGS']
         flags = file.settings['COMPILER_FLAGS'].split
