@@ -61,9 +61,9 @@ struct VenueCardView: View {
                     Text(venue.category.displayName)
                         .font(.appCaption)
                         .foregroundColor(.appSubtext)
-                    if let priceLevel = venue.priceLevelString, !priceLevel.isEmpty {
+                    if !venue.priceLevelString.isEmpty {
                         Text("·").foregroundColor(.appSubtext)
-                        Text(priceLevel)
+                        Text(venue.priceLevelString)
                             .font(.appCaption)
                             .foregroundColor(.appSubtext)
                     }
@@ -109,7 +109,7 @@ struct VenueCardView: View {
     private var activeNowBadge: some View {
         HStack(spacing: 4) {
             Circle()
-                .fill(.activeGreen)
+                .fill(Color.activeGreen)
                 .frame(width: 6, height: 6)
             Text("Now")
                 .font(.system(size: 10, weight: .bold))

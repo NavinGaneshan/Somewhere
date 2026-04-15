@@ -24,7 +24,7 @@ struct DealRowView: View {
                         // Active indicator
                         if deal.isActiveNow {
                             HStack(spacing: 3) {
-                                Circle().fill(.activeGreen).frame(width: 5, height: 5)
+                                Circle().fill(Color.activeGreen).frame(width: 5, height: 5)
                                 Text("Active").font(.system(size: 10, weight: .bold)).foregroundColor(.activeGreen)
                             }
                         }

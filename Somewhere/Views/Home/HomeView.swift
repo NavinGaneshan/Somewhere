@@ -195,7 +195,7 @@ struct HomeView: View {
 
             if viewModel.activeDealsCount > 0 {
                 HStack(spacing: 4) {
-                    Circle().fill(.activeGreen).frame(width: 7, height: 7)
+                    Circle().fill(Color.activeGreen).frame(width: 7, height: 7)
                     Text("\(viewModel.activeDealsCount) active now")
                         .font(.appCaption.weight(.semibold))
                         .foregroundColor(.activeGreen)
