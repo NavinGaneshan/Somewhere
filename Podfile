@@ -3,19 +3,19 @@ use_frameworks!
 inhibit_all_warnings!
 
 def firebase_pods
-  pod 'FirebaseAuth', '~> 10.0'
-  pod 'FirebaseFirestore', '~> 10.0'
-  pod 'FirebaseStorage', '~> 10.0'
-  pod 'FirebaseFunctions', '~> 10.0'
-  pod 'FirebaseAnalytics', '~> 10.0'
-  pod 'FirebaseAppCheck', '~> 10.0'
+  pod 'FirebaseAuth', '~> 11.0'
+  pod 'FirebaseFirestore', '~> 11.0'
+  pod 'FirebaseStorage', '~> 11.0'
+  pod 'FirebaseFunctions', '~> 11.0'
+  pod 'FirebaseAnalytics', '~> 11.0'
+  pod 'FirebaseAppCheck', '~> 11.0'
 end
 
 target 'Somewhere' do
   firebase_pods
-  pod 'GoogleSignIn', '~> 7.0'
-  pod 'GooglePlaces', '~> 8.0'
-  pod 'SDWebImageSwiftUI', '~> 2.0'
+  pod 'GoogleSignIn', '~> 8.0'
+  pod 'GooglePlaces', '~> 9.0'
+  pod 'SDWebImageSwiftUI', '~> 3.0'
 end
 
 target 'SomewhereTests' do
@@ -30,14 +30,12 @@ post_install do |installer|
       config.build_settings['BUILD_LIBRARY_FOR_DISTRIBUTION'] = 'NO'
     end
 
-    # Fix BoringSSL-GRPC unsupported '-O' flag error with Xcode 15+
-    if target.name == 'BoringSSL-GRPC'
-      target.source_build_phase.files.each do |file|
-        if file.settings && file.settings['COMPILER_FLAGS']
-          flags = file.settings['COMPILER_FLAGS'].split
-          flags.reject! { |flag| flag == '-O' }
-          file.settings['COMPILER_FLAGS'] = flags.join(' ')
-        end
+    # Fix unsupported '-O' flag in all pods (BoringSSL, abseil, leveldb) for Xcode 15+
+    target.source_build_phase.files.each do |file|
+      if file.settings && file.settings['COMPILER_FLAGS']
+        flags = file.settings['COMPILER_FLAGS'].split
+        flags.reject! { |flag| flag == '-O' }
+        file.settings['COMPILER_FLAGS'] = flags.join(' ')
       end
     end
   end
