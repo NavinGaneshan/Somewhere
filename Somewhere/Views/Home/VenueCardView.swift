@@ -10,23 +10,24 @@ struct VenueCardView: View {
     let onVote: (String, Bool) -> Void
 
     private var venue: Venue { venueWithDeals.venue }
-    private var deals: [Deal] { venueWithDeals.deals }
+
+    /// Deals sorted so the most relevant (active-now, then highest score) comes first.
+    private var sortedDeals: [Deal] {
+        venueWithDeals.deals.sorted { lhs, rhs in
+            if lhs.isActiveNow != rhs.isActiveNow { return lhs.isActiveNow }
+            return lhs.score > rhs.score
+        }
+    }
 
     var body: some View {
         VStack(spacing: 0) {
-            // Venue header (always visible)
             venueHeader
-                .onTapGesture {
-                    withAnimation(AppConstants.springAnimation) {
-                        onToggleExpand()
-                    }
-                    HapticFeedback.impact(.light)
-                }
 
-            // Deals list (collapsible)
-            if isExpanded && !deals.isEmpty {
+            if isExpanded && !sortedDeals.isEmpty {
                 Divider().padding(.horizontal, 16)
                 dealsSection
+                Divider().padding(.horizontal, 16)
+                navigationButtons
             }
         }
         .background(Color.appSurface)
@@ -95,12 +96,23 @@ struct VenueCardView: View {
                 .foregroundColor(.appSubtext)
             }
 
-            // Chevron
-            VStack {
-                Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundColor(.appSubtext)
-                    .padding(8)
+            // Chevron — always shown so the card can toggle even for a single deal.
+            Button {
+                withAnimation(AppConstants.springAnimation) {
+                    onToggleExpand()
+                }
+                HapticFeedback.impact(.light)
+            } label: {
+                VStack(spacing: 2) {
+                    Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
+                        .font(.system(size: 13, weight: .semibold))
+                    if !sortedDeals.isEmpty {
+                        Text("\(sortedDeals.count)")
+                            .font(.system(size: 10, weight: .semibold))
+                    }
+                }
+                .foregroundColor(.appSubtext)
+                .padding(8)
             }
         }
         .padding(16)
@@ -125,16 +137,12 @@ struct VenueCardView: View {
 
     private var dealsSection: some View {
         VStack(spacing: 0) {
-            ForEach(deals) { deal in
+            ForEach(sortedDeals) { deal in
                 DealRowView(deal: deal, onVote: onVote)
-                if deal.id != deals.last?.id {
+                if deal.id != sortedDeals.last?.id {
                     Divider().padding(.horizontal, 16)
                 }
             }
-
-            // Navigation buttons
-            Divider().padding(.horizontal, 16)
-            navigationButtons
         }
     }
 

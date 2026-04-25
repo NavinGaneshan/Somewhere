@@ -79,12 +79,11 @@ class FirestoreService {
         minLat: Double, maxLat: Double,
         minLng: Double, maxLng: Double
     ) async throws -> [Venue] {
-        // Firestore doesn't support compound range queries on different fields.
-        // We filter by latitude first, then filter longitude in memory.
+        // Filter only by latitude range — compound range+equality queries require a composite
+        // Firestore index that may not exist. Callers filter isPermanentlyClosed in memory.
         let snapshot = try await venuesRef
             .whereField("latitude", isGreaterThanOrEqualTo: minLat)
             .whereField("latitude", isLessThanOrEqualTo: maxLat)
-            .whereField("isPermanentlyClosed", isEqualTo: false)
             .limit(to: 500)
             .getDocuments()
 
@@ -96,6 +95,18 @@ class FirestoreService {
     func getVenuesPendingScan(limit: Int = 20) async throws -> [Venue] {
         let snapshot = try await venuesRef
             .whereField("scanStatus", isEqualTo: VenueScanStatus.pending.rawValue)
+            .whereField("isPermanentlyClosed", isEqualTo: false)
+            .order(by: "createdAt", descending: false)
+            .limit(to: limit)
+            .getDocuments()
+        return snapshot.documents.compactMap { Venue.fromFirestore($0.data(), id: $0.documentID) }
+    }
+
+    /// Returns venues that have never been successfully scanned (pending or failed), up to limit.
+    func getVenuesNeedingScan(limit: Int = 50) async throws -> [Venue] {
+        let statuses = [VenueScanStatus.pending.rawValue, VenueScanStatus.failed.rawValue]
+        let snapshot = try await venuesRef
+            .whereField("scanStatus", in: statuses)
             .whereField("isPermanentlyClosed", isEqualTo: false)
             .order(by: "createdAt", descending: false)
             .limit(to: limit)
@@ -142,6 +153,15 @@ class FirestoreService {
             .whereField("venueId", isEqualTo: venueId)
             .whereField("status", isEqualTo: DealStatus.active.rawValue)
             .order(by: "createdAt", descending: false)
+            .getDocuments()
+        return snapshot.documents.compactMap { try? $0.data(as: Deal.self) }
+    }
+
+    /// All deals for a venue regardless of status — used in admin venue detail.
+    func getAllDealsForVenue(venueId: String) async throws -> [Deal] {
+        let snapshot = try await dealsRef
+            .whereField("venueId", isEqualTo: venueId)
+            .order(by: "createdAt", descending: true)
             .getDocuments()
         return snapshot.documents.compactMap { try? $0.data(as: Deal.self) }
     }
@@ -248,6 +268,55 @@ class FirestoreService {
         try await searchLogsRef.document(log.id).setData(
             try Firestore.Encoder().encode(log)
         )
+    }
+
+    func getRecentSearchLogs(limit: Int = 100) async throws -> [SearchLog] {
+        let snapshot = try await searchLogsRef
+            .order(by: "timestamp", descending: true)
+            .limit(to: limit)
+            .getDocuments()
+        return snapshot.documents.compactMap { try? $0.data(as: SearchLog.self) }
+    }
+
+    /// Delete all deals belonging to a venue — used before a forced rescan.
+    func deleteDealsForVenue(id: String) async throws -> Int {
+        let snapshot = try await dealsRef
+            .whereField("venueId", isEqualTo: id)
+            .getDocuments()
+        for doc in snapshot.documents {
+            try await doc.reference.delete()
+        }
+        return snapshot.documents.count
+    }
+
+    /// Clear PVA cell records in a bounding box so the area gets re-searched on the next pull.
+    func deletePVACellsInBounds(minLat: Double, maxLat: Double, minLng: Double, maxLng: Double) async throws -> Int {
+        let snapshot = try await db.collection("pvaCells")
+            .whereField("centerLatitude", isGreaterThanOrEqualTo: minLat)
+            .whereField("centerLatitude", isLessThanOrEqualTo: maxLat)
+            .getDocuments()
+        var deleted = 0
+        for doc in snapshot.documents {
+            let lng = doc.data()["centerLongitude"] as? Double ?? 0
+            guard lng >= minLng, lng <= maxLng else { continue }
+            try await doc.reference.delete()
+            deleted += 1
+        }
+        return deleted
+    }
+
+    /// Delete every document in a collection in batches of 400. Returns total deleted.
+    func deleteAllDocuments(in ref: CollectionReference) async throws -> Int {
+        var totalDeleted = 0
+        while true {
+            let snapshot = try await ref.limit(to: 400).getDocuments()
+            guard !snapshot.documents.isEmpty else { break }
+            let batch = db.batch()
+            snapshot.documents.forEach { batch.deleteDocument($0.reference) }
+            try await batch.commit()
+            totalDeleted += snapshot.documents.count
+        }
+        return totalDeleted
     }
 
     // MARK: - User Operations (Admin)

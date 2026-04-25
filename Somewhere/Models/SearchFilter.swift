@@ -83,6 +83,7 @@ struct SearchFilter: Equatable {
     var showOnlyVerified: Bool
     var showOnlyActiveNow: Bool
     var searchQuery: String                   // text search in name/description
+    var locationQuery: String                 // city or zip; empty = use device location
 
     static var `default`: SearchFilter {
         SearchFilter(
@@ -96,7 +97,8 @@ struct SearchFilter: Equatable {
             sortOption: .distance,
             showOnlyVerified: false,
             showOnlyActiveNow: false,
-            searchQuery: ""
+            searchQuery: "",
+            locationQuery: ""
         )
     }
 
@@ -116,6 +118,7 @@ struct SearchFilter: Equatable {
         showOnlyVerified ||
         showOnlyActiveNow ||
         !searchQuery.isEmpty ||
+        !locationQuery.isEmpty ||
         searchRadius != 1.0
     }
 
@@ -127,6 +130,7 @@ struct SearchFilter: Equatable {
         if !selectedDays.isEmpty { count += 1 }
         if showOnlyVerified { count += 1 }
         if showOnlyActiveNow { count += 1 }
+        if !locationQuery.isEmpty { count += 1 }
         if searchRadius != 1.0 { count += 1 }
         return count
     }

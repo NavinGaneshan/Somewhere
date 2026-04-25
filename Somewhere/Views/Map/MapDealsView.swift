@@ -5,7 +5,7 @@ struct MapDealsView: View {
     @StateObject private var viewModel = DealsViewModel()
     @EnvironmentObject var locationService: LocationService
     @State private var region = MKCoordinateRegion(
-        center: CLLocationCoordinate2D(latitude: 37.7749, longitude: -122.4194),
+        center: CLLocationCoordinate2D(latitude: 33.7890, longitude: -84.3880),
         span: MKCoordinateSpan(latitudeDelta: 0.03, longitudeDelta: 0.03)
     )
     @State private var selectedVenueId: String?

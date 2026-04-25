@@ -13,7 +13,7 @@ struct AdminDealsView: View {
             // Tab selector
             Picker("", selection: $selectedTab) {
                 Text("Pending (\(viewModel.pendingDeals.count))").tag(0)
-                Text("All Deals").tag(1)
+                Text("All Deals (\(viewModel.allDeals.count))").tag(1)
             }
             .pickerStyle(.segmented)
             .padding(16)
@@ -42,15 +42,18 @@ struct AdminDealsView: View {
         .sheet(isPresented: $showingRejectAlert) {
             rejectSheet
         }
+        .alert("Error", isPresented: .constant(viewModel.errorMessage != nil)) {
+            Button("OK") { viewModel.errorMessage = nil }
+        } message: {
+            Text(viewModel.errorMessage ?? "")
+        }
         .onAppear {
-            if selectedTab == 1 && viewModel.allDeals.isEmpty {
+            if viewModel.allDeals.isEmpty {
                 Task { await viewModel.loadAllDeals() }
             }
         }
-        .onChange(of: selectedTab) { tab in
-            if tab == 1 && viewModel.allDeals.isEmpty {
-                Task { await viewModel.loadAllDeals() }
-            }
+        .refreshable {
+            Task { await viewModel.loadAllDeals() }
         }
     }
 
@@ -245,31 +248,71 @@ struct PendingDealRow: View {
 struct AdminDealRow: View {
     let deal: Deal
     let onDelete: () -> Void
+
+    var body: some View {
+        AdminDealCard(deal: deal, onDelete: onDelete)
+    }
+}
+
+// MARK: - Deal Card (shared between Deals list and Venue detail)
+
+struct AdminDealCard: View {
+    let deal: Deal
+    let onDelete: () -> Void
     @State private var showingDeleteConfirm = false
 
     var body: some View {
-        HStack(spacing: 10) {
-            Text(deal.category.icon)
-                .frame(width: 32, height: 32)
-                .background(deal.category.uiColor.opacity(0.12))
-                .cornerRadius(6)
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .top, spacing: 10) {
+                // Category badge
+                Text(deal.category.icon)
+                    .font(.system(size: 20))
+                    .frame(width: 36, height: 36)
+                    .background(deal.category.uiColor.opacity(0.12))
+                    .cornerRadius(8)
 
-            VStack(alignment: .leading, spacing: 3) {
-                Text(deal.title).font(.appCaption.weight(.semibold)).foregroundColor(.appText).lineLimit(1)
-                Text(deal.venueName).font(.appCaption2).foregroundColor(.appSubtext)
-                dealStatusBadge(deal.status)
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack {
+                        Text(deal.title)
+                            .font(.appSubheadline.weight(.semibold))
+                            .foregroundColor(.appText)
+                        Spacer()
+                        dealStatusBadge(deal.status)
+                    }
+                    Text(deal.venueName)
+                        .font(.appCaption)
+                        .foregroundColor(.appSubtext)
+                }
             }
 
-            Spacer()
-
-            Button(role: .destructive) {
-                showingDeleteConfirm = true
-            } label: {
-                Image(systemName: "trash").font(.system(size: 14)).foregroundColor(.appError)
+            // Description (the actual deal text including price)
+            if !deal.description.isEmpty && deal.description != deal.title {
+                Text(deal.description)
+                    .font(.appCaption)
+                    .foregroundColor(.appSubtext)
+                    .lineLimit(3)
+                    .fixedSize(horizontal: false, vertical: true)
             }
+
+            // Time + days
+            HStack(spacing: 8) {
+                Label(deal.formattedTimeRange, systemImage: "clock")
+                Text("·").foregroundColor(.appDivider)
+                Text(deal.formattedDays)
+                Spacer()
+                Button(role: .destructive) {
+                    showingDeleteConfirm = true
+                } label: {
+                    Image(systemName: "trash")
+                        .font(.system(size: 13))
+                        .foregroundColor(.appError)
+                }
+            }
+            .font(.appCaption.weight(.medium))
+            .foregroundColor(.appText)
         }
-        .padding(.vertical, 4)
-        .confirmationDialog("Delete Deal", isPresented: $showingDeleteConfirm) {
+        .padding(.vertical, 10)
+        .confirmationDialog("Delete this deal?", isPresented: $showingDeleteConfirm) {
             Button("Delete", role: .destructive) { onDelete() }
         }
     }
@@ -277,15 +320,18 @@ struct AdminDealRow: View {
     private func dealStatusBadge(_ status: DealStatus) -> some View {
         let (label, color): (String, Color) = {
             switch status {
-            case .active: return ("Active", .appSuccess)
-            case .pending: return ("Pending", .appWarning)
-            case .rejected: return ("Rejected", .appError)
-            case .expired: return ("Expired", .appSubtext)
-            case .unverified: return ("Unverified", .inactiveGray)
+            case .active:      return ("Active", .appSuccess)
+            case .pending:     return ("Pending", .appWarning)
+            case .rejected:    return ("Rejected", .appError)
+            case .expired:     return ("Expired", .appSubtext)
+            case .unverified:  return ("Unverified", .inactiveGray)
             }
         }()
         return Text(label)
             .font(.system(size: 9, weight: .bold))
+            .padding(.horizontal, 5).padding(.vertical, 2)
+            .background(color.opacity(0.12))
             .foregroundColor(color)
+            .cornerRadius(4)
     }
 }

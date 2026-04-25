@@ -38,8 +38,8 @@ class LocationService: NSObject, ObservableObject {
     private var locationContinuation: CheckedContinuation<CLLocation, Error>?
     private var locationUpdateTimer: Timer?
 
-    // Default location (San Francisco) as fallback for previews
-    static let defaultLocation = CLLocation(latitude: 37.7749, longitude: -122.4194)
+    // Default location (Atlanta, GA 30309) as fallback for previews
+    static let defaultLocation = CLLocation(latitude: 33.7890, longitude: -84.3880)
 
     override init() {
         super.init()
@@ -91,25 +91,37 @@ class LocationService: NSObject, ObservableObject {
             }
         }
 
-        return try await withCheckedThrowingContinuation { continuation in
-            MainActor.assumeIsolated { [weak self] in
-                guard let self = self else {
-                    continuation.resume(throwing: LocationError.locationUnavailable)
-                    return
-                }
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                MainActor.assumeIsolated { [weak self] in
+                    guard let self = self else {
+                        continuation.resume(throwing: LocationError.locationUnavailable)
+                        return
+                    }
 
-                self.locationContinuation = continuation
-                self.isLocating = true
-                self.locationManager.requestLocation()
+                    self.locationContinuation = continuation
+                    self.isLocating = true
+                    self.locationManager.requestLocation()
 
-                // Timeout
-                self.locationUpdateTimer = Timer.scheduledTimer(withTimeInterval: timeout, repeats: false) { [weak self] _ in
-                    Task { @MainActor [weak self] in
-                        self?.locationContinuation?.resume(throwing: LocationError.timeout)
-                        self?.locationContinuation = nil
-                        self?.isLocating = false
+                    // Timeout
+                    self.locationUpdateTimer = Timer.scheduledTimer(withTimeInterval: timeout, repeats: false) { [weak self] _ in
+                        Task { @MainActor [weak self] in
+                            guard let self = self, let c = self.locationContinuation else { return }
+                            c.resume(throwing: LocationError.timeout)
+                            self.locationContinuation = nil
+                            self.isLocating = false
+                        }
                     }
                 }
+            }
+        } onCancel: {
+            Task { @MainActor [weak self] in
+                guard let self = self, let c = self.locationContinuation else { return }
+                c.resume(throwing: CancellationError())
+                self.locationContinuation = nil
+                self.isLocating = false
+                self.locationUpdateTimer?.invalidate()
+                self.locationUpdateTimer = nil
             }
         }
     }

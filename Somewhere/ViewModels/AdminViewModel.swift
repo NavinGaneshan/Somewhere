@@ -1,4 +1,5 @@
 import Foundation
+import CoreLocation
 import FirebaseFirestore
 import Combine
 
@@ -106,9 +107,13 @@ class AdminViewModel: ObservableObject {
                 .order(by: "createdAt", descending: true)
                 .limit(to: limit)
                 .getDocuments()
-            venues = snapshot.documents.compactMap {
+            var loaded = snapshot.documents.compactMap {
                 Venue.fromFirestore($0.data(), id: $0.documentID)
             }
+            if let loc = LocationService.shared.currentLocation {
+                loaded.sort { $0.distanceMiles(from: loc) < $1.distanceMiles(from: loc) }
+            }
+            venues = loaded
             totalVenues = try await firestoreService.getVenueCount()
             pendingVenues = try await firestoreService.getVenuesPendingScan(limit: 20)
         } catch {
@@ -138,6 +143,24 @@ class AdminViewModel: ObservableObject {
         }
     }
 
+    func deleteAllVenuesAndDeals() async {
+        isLoading = true
+        do {
+            let deletedDeals = try await firestoreService.deleteAllDocuments(in: firestoreService.dealsRef)
+            let deletedVenues = try await firestoreService.deleteAllDocuments(in: firestoreService.venuesRef)
+            venues = []
+            allDeals = []
+            pendingDeals = []
+            totalVenues = 0
+            totalDeals = 0
+            successMessage = "Deleted \(deletedVenues) venues and \(deletedDeals) deals."
+            HapticFeedback.success()
+        } catch {
+            errorMessage = "Cleanup failed: \(error.localizedDescription)"
+        }
+        isLoading = false
+    }
+
     // MARK: - Deals
 
     func setupPendingDealsListener() {
@@ -155,10 +178,25 @@ class AdminViewModel: ObservableObject {
                 .order(by: "createdAt", descending: true)
                 .limit(to: limit)
                 .getDocuments()
-            allDeals = snapshot.documents.compactMap { try? $0.data(as: Deal.self) }
+            print("AdminViewModel.loadAllDeals: fetched \(snapshot.documents.count) docs")
+            var loaded: [Deal] = snapshot.documents.compactMap { doc in
+                if let deal = try? doc.data(as: Deal.self) { return deal }
+                if let deal = Deal.fromFirestore(doc.data(), id: doc.documentID) { return deal }
+                print("AdminViewModel.loadAllDeals: failed to parse doc \(doc.documentID) data=\(doc.data().keys.sorted())")
+                return nil
+            }
+            if let loc = LocationService.shared.currentLocation {
+                loaded.sort {
+                    let d0 = CLLocation(latitude: $0.venueLatitude, longitude: $0.venueLongitude)
+                    let d1 = CLLocation(latitude: $1.venueLatitude, longitude: $1.venueLongitude)
+                    return loc.distance(from: d0) < loc.distance(from: d1)
+                }
+            }
+            allDeals = loaded
             totalDeals = try await firestoreService.getDealCount()
         } catch {
-            errorMessage = "Failed to load deals."
+            print("AdminViewModel.loadAllDeals error: \(error)")
+            errorMessage = "Failed to load deals: \(error.localizedDescription)"
         }
     }
 
@@ -236,6 +274,117 @@ class AdminViewModel: ObservableObject {
         isLoading = false
     }
 
+    // MARK: - Search Logs
+
+    func loadSearchLogs(limit: Int = 100) async {
+        do {
+            searchLogs = try await firestoreService.getRecentSearchLogs(limit: limit)
+        } catch {
+            errorMessage = "Failed to load search logs: \(error.localizedDescription)"
+        }
+    }
+
+    // MARK: - Force Rescan
+
+    /// Delete all deals for a venue and kick off a fresh website+photos scan.
+    func rescanVenue(_ venue: Venue, currentUserId: String) async {
+        isLoading = true
+        do {
+            let deleted = try await firestoreService.deleteDealsForVenue(id: venue.id)
+            try? await firestoreService.updateVenueField(id: venue.id, field: "dealCount", value: 0)
+            Task.detached {
+                await PVAService.autoScanVenue(
+                    placeId: venue.placeId,
+                    venueId: venue.id,
+                    venueName: venue.name,
+                    venueAddress: venue.formattedAddress,
+                    venueLatitude: venue.latitude,
+                    venueLongitude: venue.longitude,
+                    userId: currentUserId
+                )
+            }
+            successMessage = "Rescan started (\(deleted) old deals cleared)."
+        } catch {
+            errorMessage = "Rescan failed: \(error.localizedDescription)"
+        }
+        isLoading = false
+    }
+
+    /// Scan unscanned / failed venues in background. Optionally limits to venues within
+    /// `radiusMiles` of a center coordinate; pass nil center to scan regardless of location.
+    func scanAllUnscannedVenues(
+        userId: String,
+        center: CLLocationCoordinate2D? = nil,
+        radiusMiles: Double = 5.0,
+        batchSize: Int = 50
+    ) async {
+        isLoading = true
+        do {
+            // Fetch more than batchSize so we have room to filter by distance.
+            let fetchLimit = center != nil ? batchSize * 4 : batchSize
+            var candidates = try await firestoreService.getVenuesNeedingScan(limit: fetchLimit)
+
+            if let center = center {
+                let centerLocation = CLLocation(latitude: center.latitude, longitude: center.longitude)
+                candidates = candidates
+                    .filter { $0.distanceMiles(from: centerLocation) <= radiusMiles }
+                    .prefix(batchSize)
+                    .map { $0 }
+            }
+
+            guard !candidates.isEmpty else {
+                if let center = center {
+                    // No existing venues — discover new ones via Places API then scan them
+                    successMessage = "No existing venues found — discovering new venues in area..."
+                    let (_, newVenues) = await PVAService.refreshRegion(
+                        coordinate: center,
+                        radiusMiles: radiusMiles,
+                        userId: userId
+                    )
+                    successMessage = newVenues > 0
+                        ? "Found \(newVenues) new venue(s). Scanning in background — check back in a minute."
+                        : "No venues found in this area via Google Places."
+                } else {
+                    successMessage = "All venues already scanned."
+                }
+                isLoading = false
+                return
+            }
+
+            for venue in candidates {
+                Task.detached {
+                    await PVAService.autoScanVenue(
+                        placeId: venue.placeId,
+                        venueId: venue.id,
+                        venueName: venue.name,
+                        venueAddress: venue.formattedAddress,
+                        venueLatitude: venue.latitude,
+                        venueLongitude: venue.longitude,
+                        userId: userId
+                    )
+                }
+            }
+            successMessage = "Scanning \(candidates.count) venue(s) in background — check back in a minute."
+        } catch {
+            errorMessage = "Bulk scan failed: \(error.localizedDescription)"
+        }
+        isLoading = false
+    }
+
+    /// Full region refresh: rescan existing venues + discover new ones via Places API.
+    func refreshRegion(latitude: Double, longitude: Double, radiusMiles: Double, userId: String) async {
+        isLoading = true
+        let coordinate = CLLocationCoordinate2D(latitude: latitude, longitude: longitude)
+        let (rescanned, newVenues) = await PVAService.refreshRegion(
+            coordinate: coordinate,
+            radiusMiles: radiusMiles,
+            userId: userId
+        )
+        let newMsg = newVenues > 0 ? " · \(newVenues) new venue(s) added." : ""
+        successMessage = "Rescanning \(rescanned) venue(s) in background.\(newMsg)"
+        isLoading = false
+    }
+
     // MARK: - Stats
 
     func loadStats() async {
@@ -262,6 +411,13 @@ class AdminViewModel: ObservableObject {
                 .count
                 .getAggregation(source: .server)
             activeUsersLast7Days = Int(truncating: userSnapshot.count)
+
+            // Total active deals
+            let totalDealSnapshot = try await firestoreService.dealsRef
+                .whereField("status", isEqualTo: "active")
+                .count
+                .getAggregation(source: .server)
+            totalDeals = Int(truncating: totalDealSnapshot.count)
 
             // PVA stats
             let pendingVenueSnapshot = try await firestoreService.venuesRef

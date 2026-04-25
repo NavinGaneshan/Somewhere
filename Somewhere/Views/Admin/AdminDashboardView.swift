@@ -163,11 +163,15 @@ struct AdminDashboardView: View {
             }
             Divider().padding(.horizontal, 16)
             AdminNavRow(icon: "gearshape.2.fill", title: "PVA Controls", subtitle: "Progressive Venue Addition", color: Color(hex: "#FF6B6B")) {
-                AdminPVAView().environmentObject(viewModel)
+                AdminPVAView().environmentObject(viewModel).environmentObject(authService)
             }
             Divider().padding(.horizontal, 16)
             AdminNavRow(icon: "chart.bar.fill", title: "Analytics", subtitle: "Usage & performance", color: Color(hex: "#4CAF50")) {
                 AdminAnalyticsView().environmentObject(viewModel)
+            }
+            Divider().padding(.horizontal, 16)
+            AdminNavRow(icon: "list.bullet.rectangle", title: "Search Logs", subtitle: "Recent PVA searches", color: Color(hex: "#8E44AD")) {
+                AdminSearchLogsView().environmentObject(viewModel)
             }
         }
         .background(Color.appSurface)

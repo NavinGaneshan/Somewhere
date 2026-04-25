@@ -103,6 +103,36 @@ struct FilterSheetView: View {
                         }
                     }
 
+                    // Location Override
+                    filterSection("Location") {
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack(spacing: 8) {
+                                Image(systemName: "mappin.and.ellipse")
+                                    .foregroundColor(.appPrimary)
+                                TextField("City, zip, or leave empty for current", text: $localFilter.locationQuery)
+                                    .font(.appSubheadline)
+                                    .textInputAutocapitalization(.words)
+                                    .autocorrectionDisabled()
+                                    .submitLabel(.done)
+                                if !localFilter.locationQuery.isEmpty {
+                                    Button {
+                                        localFilter.locationQuery = ""
+                                    } label: {
+                                        Image(systemName: "xmark.circle.fill").foregroundColor(.appSubtext)
+                                    }
+                                }
+                            }
+                            .padding(.horizontal, 12)
+                            .frame(height: 44)
+                            .background(Color.appSurface)
+                            .cornerRadius(10)
+                            .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.appDivider, lineWidth: 1))
+                            Text("Overrides device location when set. Examples: \"Atlanta, GA\", \"30309\".")
+                                .font(.appCaption)
+                                .foregroundColor(.appSubtext)
+                        }
+                    }
+
                     // Search Radius
                     filterSection("Search Radius") {
                         VStack(spacing: 8) {

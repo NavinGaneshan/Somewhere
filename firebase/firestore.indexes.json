@@ -12,9 +12,25 @@
       "collectionGroup": "venues",
       "queryScope": "COLLECTION",
       "fields": [
+        { "fieldPath": "isPermanentlyClosed", "order": "ASCENDING" },
+        { "fieldPath": "latitude", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "venues",
+      "queryScope": "COLLECTION",
+      "fields": [
         { "fieldPath": "scanStatus", "order": "ASCENDING" },
         { "fieldPath": "isPermanentlyClosed", "order": "ASCENDING" },
         { "fieldPath": "createdAt", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "venues",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "scanStatus", "order": "ASCENDING" },
+        { "fieldPath": "isPermanentlyClosed", "order": "ASCENDING" }
       ]
     },
     {
@@ -48,13 +64,6 @@
       "fields": [
         { "fieldPath": "createdBy", "order": "ASCENDING" },
         { "fieldPath": "createdAt", "order": "DESCENDING" }
-      ]
-    },
-    {
-      "collectionGroup": "users",
-      "queryScope": "COLLECTION",
-      "fields": [
-        { "fieldPath": "lastActiveAt", "order": "DESCENDING" }
       ]
     },
     {

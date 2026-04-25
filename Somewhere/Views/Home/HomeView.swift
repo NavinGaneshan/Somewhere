@@ -168,6 +168,14 @@ struct HomeView: View {
                         viewModel.applyFilter()
                     }
                 }
+
+                if !viewModel.filter.locationQuery.isEmpty {
+                    FilterChip(label: viewModel.filter.locationQuery, icon: "mappin.and.ellipse", color: .appPrimary) {
+                        var newFilter = viewModel.filter
+                        newFilter.locationQuery = ""
+                        viewModel.updateFilter(newFilter)
+                    }
+                }
             }
             .padding(.horizontal, 16)
         }
@@ -201,6 +209,27 @@ struct HomeView: View {
                         .foregroundColor(.activeGreen)
                 }
             }
+
+            if !viewModel.filteredVenuesWithDeals.isEmpty {
+                Button {
+                    withAnimation(AppConstants.springAnimation) {
+                        if viewModel.allExpanded {
+                            viewModel.collapseAll()
+                        } else {
+                            viewModel.expandAll()
+                        }
+                    }
+                    HapticFeedback.impact(.light)
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: viewModel.allExpanded ? "chevron.up.square" : "chevron.down.square")
+                            .font(.system(size: 12, weight: .semibold))
+                        Text(viewModel.allExpanded ? "Collapse all" : "Expand all")
+                            .font(.appCaption.weight(.semibold))
+                    }
+                    .foregroundColor(.appPrimary)
+                }
+            }
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 6)
@@ -215,7 +244,7 @@ struct HomeView: View {
                     VenueCardView(
                         venueWithDeals: vwd,
                         userLocation: viewModel.lastSearchLocation,
-                        isExpanded: viewModel.expandedVenueIds.isEmpty || viewModel.expandedVenueIds.contains(vwd.id),
+                        isExpanded: viewModel.expandedVenueIds.contains(vwd.id),
                         onToggleExpand: { viewModel.toggleVenueExpansion(vwd.id) },
                         onVote: { dealId, upvote in
                             Task { await viewModel.vote(dealId: dealId, upvote: upvote) }

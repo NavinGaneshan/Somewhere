@@ -1,4 +1,5 @@
 import Foundation
+import UIKit
 
 // MARK: - Web Scan Result
 struct WebScanResult {
@@ -40,6 +41,19 @@ class WebScanService {
             throw WebScanError.fetchFailed
         }
 
+        // Skip binary/PDF responses — they can't be parsed as HTML text
+        let contentType = httpResponse.value(forHTTPHeaderField: "Content-Type") ?? ""
+        let binaryTypes = ["application/pdf", "application/octet-stream",
+                           "application/zip", "image/"]
+        if binaryTypes.contains(where: { contentType.hasPrefix($0) }) {
+            throw WebScanError.fetchFailed
+        }
+
+        // Also detect raw PDF bytes regardless of Content-Type header
+        if data.prefix(5) == Data("%PDF-".utf8) {
+            throw WebScanError.fetchFailed
+        }
+
         guard let html = String(data: data, encoding: .utf8) ??
                          String(data: data, encoding: .isoLatin1) else {
             throw WebScanError.encodingError
@@ -50,17 +64,166 @@ class WebScanService {
 
     // MARK: - Scan for Deals
 
+    private static let linkKeywordRegex = #"(?i)(menu|happy.?hour|happyhour|specials?|deals?|drinks?|food|cocktails?)"#
+    private static let maxLinkedPages = 3
+    private static let maxOCRImages = 5
+
+    /// Fetches the venue website, follows links that look like menu / happy-hour / specials pages,
+    /// and OCRs any images that look like menus/specials. Returns deals tagged with the specific
+    /// page or image URL they were found on.
     func scanForDeals(url: String) async throws -> WebScanResult {
-        let html = try await fetchWebsite(url: url)
-        let text = extractText(from: html)
-        let deals = extractDeals(from: text)
+        let normalizedURL = normalizeURL(url)
+        guard let rootURL = URL(string: normalizedURL) else {
+            throw WebScanError.invalidURL
+        }
+
+        var visitedPages = Set<String>()
+        var imageURLs = Set<String>()
+        var allDeals: [ExtractedDeal] = []
+        var aggregatedText = ""
+        var mainHTML = ""
+
+        // 1. Main page — extract deals tagged with the root URL.
+        do {
+            mainHTML = try await fetchWebsite(url: normalizedURL)
+            visitedPages.insert(rootURL.absoluteString)
+            let mainText = extractText(from: mainHTML)
+            aggregatedText += section("main", mainText)
+            imageURLs.formUnion(extractImageURLs(from: mainHTML, baseURL: rootURL))
+            let mainDeals = await PhotoScanService.shared
+                .extractDeals(from: mainText, sourceURL: normalizedURL).extractedDeals
+            allDeals.append(contentsOf: mainDeals)
+        } catch {
+            throw error
+        }
+
+        // 2. Follow up to N links that look menu/happy-hour-ish.
+        let candidateLinks = extractCandidateLinks(from: mainHTML, baseURL: rootURL, limit: Self.maxLinkedPages)
+        for link in candidateLinks {
+            guard !visitedPages.contains(link.absoluteString) else { continue }
+            visitedPages.insert(link.absoluteString)
+            do {
+                let html = try await fetchWebsite(url: link.absoluteString)
+                let pageText = extractText(from: html)
+                aggregatedText += section(link.lastPathComponent, pageText)
+                imageURLs.formUnion(extractImageURLs(from: html, baseURL: link))
+                let pageDeals = await PhotoScanService.shared
+                    .extractDeals(from: pageText, sourceURL: link.absoluteString).extractedDeals
+                allDeals.append(contentsOf: pageDeals)
+            } catch {
+                continue
+            }
+        }
+
+        // 3. OCR up to N images prioritized by menu-ish filenames/paths.
+        let priorityImages = imageURLs
+            .sorted { imageMenuScore($0) > imageMenuScore($1) }
+            .prefix(Self.maxOCRImages)
+
+        for imageURLString in priorityImages {
+            guard imageMenuScore(imageURLString) > 0 else { break }
+            guard let imageURL = URL(string: imageURLString) else { continue }
+            do {
+                let (data, _) = try await session.data(from: imageURL)
+                guard let image = UIImage(data: data) else { continue }
+                let imgText = try await PhotoScanService.shared.recognizeText(in: image)
+                if !imgText.isEmpty {
+                    aggregatedText += section("img:\(imageURL.lastPathComponent)", imgText)
+                    let imgDeals = await PhotoScanService.shared
+                        .extractDeals(from: imgText, sourceURL: imageURLString).extractedDeals
+                    allDeals.append(contentsOf: imgDeals)
+                }
+            } catch {
+                continue
+            }
+        }
 
         return WebScanResult(
             url: url,
-            htmlContent: html,
-            extractedText: text,
-            extractedDeals: deals
+            htmlContent: mainHTML,
+            extractedText: aggregatedText,
+            extractedDeals: allDeals
         )
+    }
+
+    private func section(_ label: String, _ body: String) -> String {
+        guard !body.isEmpty else { return "" }
+        return "\n\n=== \(label) ===\n\(body)"
+    }
+
+    // MARK: - Link + Image Extraction
+
+    /// Finds `<a href="...">visible text</a>` pairs whose href or text hints at a menu / happy-hour / specials page.
+    private func extractCandidateLinks(from html: String, baseURL: URL, limit: Int) -> [URL] {
+        let pattern = #"<a\s+[^>]*href\s*=\s*["']([^"']+)["'][^>]*>([\s\S]*?)</a>"#
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else {
+            return []
+        }
+        let range = NSRange(html.startIndex..., in: html)
+        let matches = regex.matches(in: html, range: range)
+
+        var seen = Set<String>()
+        var results: [URL] = []
+        for match in matches {
+            guard
+                let hrefRange = Range(match.range(at: 1), in: html),
+                let textRange = Range(match.range(at: 2), in: html)
+            else { continue }
+            let href = String(html[hrefRange])
+            let linkText = stripTags(String(html[textRange]))
+
+            // Score on both href and visible text.
+            let combined = "\(href) \(linkText)"
+            guard combined.range(of: Self.linkKeywordRegex, options: .regularExpression) != nil else { continue }
+
+            guard let resolved = URL(string: href, relativeTo: baseURL)?.absoluteURL else { continue }
+            // Only follow http(s) on the same host.
+            guard resolved.scheme?.hasPrefix("http") == true else { continue }
+            guard resolved.host == baseURL.host else { continue }
+
+            let key = resolved.absoluteString
+            if seen.insert(key).inserted {
+                results.append(resolved)
+                if results.count >= limit { break }
+            }
+        }
+        return results
+    }
+
+    /// Extracts all `<img src="...">` URLs resolved against baseURL.
+    private func extractImageURLs(from html: String, baseURL: URL) -> Set<String> {
+        let pattern = #"<img\s+[^>]*src\s*=\s*["']([^"']+)["'][^>]*>"#
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else {
+            return []
+        }
+        let range = NSRange(html.startIndex..., in: html)
+        let matches = regex.matches(in: html, range: range)
+
+        var results = Set<String>()
+        for match in matches {
+            guard let srcRange = Range(match.range(at: 1), in: html) else { continue }
+            let src = String(html[srcRange])
+            guard let resolved = URL(string: src, relativeTo: baseURL)?.absoluteURL else { continue }
+            guard resolved.scheme?.hasPrefix("http") == true else { continue }
+            results.insert(resolved.absoluteString)
+        }
+        return results
+    }
+
+    /// Higher score = more likely to be a menu/specials image.
+    private func imageMenuScore(_ urlString: String) -> Int {
+        let lower = urlString.lowercased()
+        var score = 0
+        for keyword in ["menu", "happy-hour", "happyhour", "happy_hour", "specials", "special", "drink", "cocktail", "food"] {
+            if lower.contains(keyword) { score += 1 }
+        }
+        return score
+    }
+
+    private func stripTags(_ html: String) -> String {
+        removePattern(#"<[^>]+>"#, from: html)
+            .replacingOccurrences(of: "&nbsp;", with: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     // MARK: - Text Extraction
@@ -95,65 +258,6 @@ class WebScanService {
         return text
     }
 
-    // MARK: - Deal Extraction from Text
-
-    private func extractDeals(from text: String) -> [ExtractedDeal] {
-        // Focus on sections that mention happy hour
-        let sections = findHappyHourSections(in: text)
-
-        if sections.isEmpty {
-            // Try to find any deal text if no "happy hour" sections
-            return PhotoScanService.shared.extractDeals(from: text).extractedDeals
-        }
-
-        var deals: [ExtractedDeal] = []
-        for section in sections {
-            let sectionDeals = PhotoScanService.shared.extractDeals(from: section).extractedDeals
-            deals.append(contentsOf: sectionDeals)
-        }
-
-        return deals
-    }
-
-    private func findHappyHourSections(in text: String) -> [String] {
-        let lines = text.components(separatedBy: .newlines)
-        var sections: [String] = []
-        var inHappyHourSection = false
-        var currentSection: [String] = []
-        var lineCount = 0
-
-        let triggers = ["happy hour", "specials", "drink specials", "food specials", "deals"]
-
-        for line in lines {
-            let lower = line.lowercased()
-            let isTrigger = triggers.contains { lower.contains($0) }
-
-            if isTrigger {
-                if !currentSection.isEmpty && inHappyHourSection {
-                    sections.append(currentSection.joined(separator: "\n"))
-                }
-                inHappyHourSection = true
-                currentSection = [line]
-                lineCount = 0
-            } else if inHappyHourSection {
-                currentSection.append(line)
-                lineCount += 1
-                if lineCount > 20 {
-                    // Section too long, save and reset
-                    sections.append(currentSection.joined(separator: "\n"))
-                    inHappyHourSection = false
-                    currentSection = []
-                }
-            }
-        }
-
-        if !currentSection.isEmpty && inHappyHourSection {
-            sections.append(currentSection.joined(separator: "\n"))
-        }
-
-        return sections
-    }
-
     // MARK: - URL Validation
 
     func isValidVenueURL(_ urlString: String) -> Bool {
@@ -164,7 +268,9 @@ class WebScanService {
 
     func normalizeURL(_ urlString: String) -> String {
         var normalized = urlString.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !normalized.hasPrefix("http://") && !normalized.hasPrefix("https://") {
+        if normalized.hasPrefix("http://") {
+            normalized = "https://" + normalized.dropFirst("http://".count)
+        } else if !normalized.hasPrefix("https://") {
             normalized = "https://" + normalized
         }
         return normalized

@@ -196,34 +196,78 @@ class AuthService: ObservableObject {
     // MARK: - Profile Management
 
     func fetchOrCreateUserProfile(firebaseUser: FirebaseAuth.User) async {
+        let uid = firebaseUser.uid
         do {
-            if let user = try await fetchUserProfile(uid: firebaseUser.uid) {
-                // Update last active
-                var updated = user
-                updated.lastActiveAt = Timestamp()
-                try? await updateUserField(uid: user.id, field: "lastActiveAt", value: Timestamp())
-                self.currentUser = updated
-            } else {
-                // Create profile for existing Firebase user
-                let newUser = AppUser.create(
-                    uid: firebaseUser.uid,
-                    email: firebaseUser.email ?? "",
-                    displayName: firebaseUser.displayName ?? "",
-                    photoURL: firebaseUser.photoURL?.absoluteString,
-                    provider: .email
+            let doc = try await db.collection("users").document(uid).getDocument()
+
+            if doc.exists, let data = doc.data() {
+                // Try the normal decode path first.
+                do {
+                    let user = try Firestore.Decoder().decode(AppUser.self, from: data)
+                    var updated = user
+                    updated.lastActiveAt = Timestamp()
+                    try? await updateUserField(uid: user.id, field: "lastActiveAt", value: Timestamp())
+                    self.currentUser = updated
+                    print("AuthService: loaded profile for \(updated.email) role=\(updated.role.rawValue) canAccessAdmin=\(updated.role.canAccessAdmin)")
+                    return
+                } catch {
+                    print("AuthService: decode failed — \(error). Fields present: \(data.keys.sorted())")
+                }
+
+                // Doc exists but can't decode (missing/extra fields). Patch missing fields with defaults
+                // WITHOUT overwriting role / banned / counters that an admin may have hand-edited.
+                let roleRaw = data["role"] as? String ?? UserRole.user.rawValue
+                let role = UserRole(rawValue: roleRaw) ?? .user
+                let isBanned = data["isBanned"] as? Bool ?? false
+                let dealsSubmitted = data["dealsSubmitted"] as? Int ?? 0
+                let dealsApproved = data["dealsApproved"] as? Int ?? 0
+
+                var patched = AppUser.create(
+                    uid: uid,
+                    email: firebaseUser.email ?? (data["email"] as? String ?? ""),
+                    displayName: firebaseUser.displayName ?? (data["displayName"] as? String ?? ""),
+                    photoURL: firebaseUser.photoURL?.absoluteString ?? (data["photoURL"] as? String),
+                    provider: .google
                 )
-                try? await saveUserProfile(newUser)
-                self.currentUser = newUser
+                patched.role = role
+                patched.isBanned = isBanned
+                patched.dealsSubmitted = dealsSubmitted
+                patched.dealsApproved = dealsApproved
+
+                try? await saveUserProfile(patched)
+                self.currentUser = patched
+                print("AuthService: patched profile (decode failed) for \(patched.email) role=\(patched.role.rawValue) — preserved from raw fields")
+                return
             }
+
+            // Truly new user.
+            let newUser = AppUser.create(
+                uid: uid,
+                email: firebaseUser.email ?? "",
+                displayName: firebaseUser.displayName ?? "",
+                photoURL: firebaseUser.photoURL?.absoluteString,
+                provider: .google
+            )
+            try? await saveUserProfile(newUser)
+            self.currentUser = newUser
+            print("AuthService: CREATED new profile for \(newUser.email) role=\(newUser.role.rawValue)")
         } catch {
-            print("Error fetching user profile: \(error)")
+            print("AuthService: Error fetching user profile: \(error)")
         }
     }
 
     func fetchUserProfile(uid: String) async throws -> AppUser? {
         let doc = try await db.collection("users").document(uid).getDocument()
-        guard doc.exists, let data = doc.data() else { return nil }
-        return try? Firestore.Decoder().decode(AppUser.self, from: data)
+        guard doc.exists, let data = doc.data() else {
+            print("AuthService: no user doc at users/\(uid)")
+            return nil
+        }
+        do {
+            return try Firestore.Decoder().decode(AppUser.self, from: data)
+        } catch {
+            print("AuthService: failed to decode user doc — \(error). Raw fields: \(data.keys.sorted())")
+            return nil
+        }
     }
 
     func saveUserProfile(_ user: AppUser) async throws {

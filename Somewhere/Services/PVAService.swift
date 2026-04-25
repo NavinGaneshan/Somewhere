@@ -1,6 +1,7 @@
 import Foundation
 import CoreLocation
 import FirebaseFirestore
+import UIKit
 
 // MARK: - PVA Result
 struct PVAResult {
@@ -48,10 +49,12 @@ actor PVAService {
 
         // Get PVA config
         let config = (try? await firestoreService.getPVAConfig()) ?? PVAConfig.default
-        guard config.pvaModeEnabled else { return result }
+        print("PVA processSearch start: coord=\(coordinate.latitude),\(coordinate.longitude) radius=\(radiusMiles)mi pvaEnabled=\(config.pvaModeEnabled) apiCalls=\(config.dailyApiCallCount)/\(config.maxPlacesApiCallsPerDay)")
+        guard config.pvaModeEnabled else { print("PVA bailed: pvaModeEnabled is false"); return result }
 
         // Check daily API limit
         if config.dailyApiCallCount >= config.maxPlacesApiCallsPerDay {
+            print("PVA bailed: daily API limit reached")
             return result  // Over limit, skip
         }
 
@@ -86,7 +89,8 @@ actor PVAService {
                     center: cellCenter,
                     radiusMeters: Int(cellSizeDegrees * 111_320 * 1.5),
                     existingPlaceIds: existingPlaceIds,
-                    config: config
+                    config: config,
+                    userId: userId
                 )
 
                 newVenueCount += searchResult.added
@@ -116,9 +120,11 @@ actor PVAService {
                 // Stop if we've hit our new-venue limit
                 if newVenueCount >= config.maxNewVenuesPerSearch { break }
             } catch {
+                print("PVA cell search error (\(cellId)): \(error)")
                 result.error = error
             }
         }
+        print("PVA processSearch done: newVenues=\(result.newVenuesAdded) alreadyKnown=\(result.venuesAlreadyKnown) apiCalls=\(result.apiCallsMade) cells=\(result.cellsProcessed.count)")
 
         // Log search
         let log = SearchLog(
@@ -152,7 +158,8 @@ actor PVAService {
         center: CLLocationCoordinate2D,
         radiusMeters: Int,
         existingPlaceIds: Set<String>,
-        config: PVAConfig
+        config: PVAConfig,
+        userId: String?
     ) async throws -> CellSearchResult {
         var result = CellSearchResult()
         var pageToken: String? = nil
@@ -186,7 +193,7 @@ actor PVAService {
                 }
 
                 // New venue - add to database
-                await addNewVenue(from: placeVenue)
+                await addNewVenue(from: placeVenue, autoScan: config.autoScanWebsites, userId: userId)
                 result.added += 1
 
                 if result.added >= config.maxNewVenuesPerSearch {
@@ -194,16 +201,18 @@ actor PVAService {
                 }
             }
 
-            // Delay between pages to respect rate limits
+            // Google requires the next_page_token to "bake" for ~2s before it becomes valid,
+            // otherwise it returns INVALID_REQUEST. Use max(configured, 2.5s).
             if pageToken != nil {
-                try await Task.sleep(nanoseconds: UInt64(config.scanDelaySeconds * 1_000_000_000))
+                let seconds = max(config.scanDelaySeconds, 2.5)
+                try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
             }
         } while pageToken != nil && pageCount < maxPages
 
         return result
     }
 
-    private func addNewVenue(from placeVenue: PlacesVenue) async {
+    private func addNewVenue(from placeVenue: PlacesVenue, autoScan: Bool, userId: String?) async {
         let venueId = UUID().uuidString
         let cellIds = gridCellIds(
             for: CLLocationCoordinate2D(latitude: placeVenue.latitude, longitude: placeVenue.longitude),
@@ -241,6 +250,175 @@ actor PVAService {
         )
 
         try? await firestoreService.saveVenue(venue)
+
+        // Fire-and-forget scan so the user doesn't wait for scraping/OCR.
+        // Combines website pages, website images, and Google Places photos into one text pool.
+        if autoScan, let userId = userId {
+            let venueAddress = venue.formattedAddress
+            let venueName = venue.name
+            let venueLat = venue.latitude
+            let venueLng = venue.longitude
+            let placeId = placeVenue.placeId
+            Task.detached {
+                await PVAService.autoScanVenue(
+                    placeId: placeId,
+                    venueId: venueId,
+                    venueName: venueName,
+                    venueAddress: venueAddress,
+                    venueLatitude: venueLat,
+                    venueLongitude: venueLng,
+                    userId: userId
+                )
+            }
+        }
+    }
+
+    // MARK: - Auto Scan
+
+    /// End-to-end auto-scan: fetches the venue's Google details, scans its website (pages + images),
+    /// OCRs Google Places photos (owner + user-posted, often including menus), and saves any deals found.
+    /// Static so multiple venues scan in parallel instead of being serialized by the actor.
+    static func autoScanVenue(
+        placeId: String,
+        venueId: String,
+        venueName: String,
+        venueAddress: String,
+        venueLatitude: Double,
+        venueLongitude: Double,
+        userId: String
+    ) async {
+        print("PVAService auto-scan: starting \(venueName)")
+
+        // 1. Get details (website + all photo references).
+        let details = try? await PlacesService.shared.getPlaceDetails(placeId: placeId)
+        let website = details?.website ?? ""
+        let photoRefs = (try? await PlacesService.shared.getPlacePhotoReferences(placeId: placeId, venueName: venueName, limit: 10)) ?? []
+
+        // 2. Website scan (already follows menu links and OCRs site images).
+        var allExtracted: [ExtractedDeal] = []
+        var sources: [String] = []
+        if !website.isEmpty {
+            do {
+                let webScan = try await WebScanService.shared.scanForDeals(url: website)
+                allExtracted.append(contentsOf: webScan.extractedDeals)
+                sources.append("website")
+                print("PVAService auto-scan: \(venueName) website → \(webScan.extractedDeals.count) deals")
+            } catch {
+                print("PVAService auto-scan: \(venueName) website scan failed: \(error)")
+            }
+        }
+
+        // 3. Google Places photos — prioritized by portrait/owner score, OCR up to 10.
+        if !photoRefs.isEmpty {
+            let photoResults = await ocrPlacePhotos(refs: Array(photoRefs.prefix(10)))
+            var photoDealCount = 0
+            for (ocrText, photoURL) in photoResults {
+                let photoDeals = await PhotoScanService.shared
+                    .extractDeals(from: ocrText, sourceURL: photoURL.absoluteString).extractedDeals
+                allExtracted.append(contentsOf: photoDeals)
+                photoDealCount += photoDeals.count
+            }
+            if photoDealCount > 0 {
+                sources.append("places-photos")
+                print("PVAService auto-scan: \(venueName) places photos → \(photoDealCount) deals")
+            }
+        }
+
+        // 4. De-duplicate by title (case-insensitive) and save.
+        let firestoreService = FirestoreService.shared
+
+        // Seed seen-set with titles already in Firestore to prevent cross-run duplicates.
+        let existingTitles = (try? await firestoreService.getAllDealsForVenue(venueId: venueId))
+            .map { $0.map { $0.title.lowercased().trimmingCharacters(in: .whitespaces) } } ?? []
+        var seen = Set(existingTitles)
+        var savedCount = 0
+        let sourceNote = sources.isEmpty ? "auto-scan" : "auto-scan (\(sources.joined(separator: ", ")))"
+
+        for extracted in allExtracted {
+            let key = extracted.title.lowercased().trimmingCharacters(in: .whitespaces)
+            guard !key.isEmpty, seen.insert(key).inserted else { continue }
+
+            let deal = Deal(
+                id: UUID().uuidString,
+                venueId: venueId,
+                venueName: venueName,
+                venueAddress: venueAddress,
+                venueLatitude: venueLatitude,
+                venueLongitude: venueLongitude,
+                title: extracted.title,
+                description: extracted.description,
+                category: extracted.suggestedCategory,
+                days: extracted.suggestedDays,
+                startTime: extracted.suggestedStartTime,
+                endTime: extracted.suggestedEndTime,
+                source: .automated,
+                status: .active,
+                isVerified: false,
+                upvotes: 0,
+                downvotes: 0,
+                reportCount: 0,
+                imageURL: nil,
+                sourceURL: extracted.sourceURL ?? (website.isEmpty ? nil : website),
+                createdBy: userId,
+                createdByName: nil,
+                createdAt: Timestamp(),
+                updatedAt: Timestamp(),
+                expiresAt: nil,
+                adminNotes: sourceNote
+            )
+            do {
+                try await firestoreService.saveDeal(deal)
+                savedCount += 1
+            } catch {
+                print("PVAService auto-scan: failed to save deal for \(venueName): \(error)")
+            }
+        }
+
+        // Mark venue as scanned (or failed if no sources were reachable at all).
+        let finalStatus: VenueScanStatus = sources.isEmpty ? .failed : .scanned
+        do {
+            var fields: [String: Any] = [
+                "scanStatus": finalStatus.rawValue,
+                "lastScannedAt": Timestamp(),
+                "updatedAt": Timestamp()
+            ]
+            if savedCount > 0 {
+                fields["dealCount"] = FieldValue.increment(Int64(savedCount))
+            }
+            try await firestoreService.venuesRef.document(venueId).updateData(fields)
+        } catch {
+            print("PVAService auto-scan: failed to update scanStatus for \(venueName): \(error)")
+        }
+
+        if savedCount > 0 {
+            print("PVAService auto-scan: saved \(savedCount) deal(s) for \(venueName) → \(finalStatus.rawValue)")
+        } else {
+            print("PVAService auto-scan: \(venueName) found 0 deals (sources: \(sources.isEmpty ? "none" : sources.joined(separator: ", "))) → \(finalStatus.rawValue)")
+        }
+    }
+
+    /// Download each Google Places photo, pre-filter for menu-like content, then OCR.
+    private static func ocrPlacePhotos(refs: [String]) async -> [(text: String, photoURL: URL)] {
+        var results: [(text: String, photoURL: URL)] = []
+        for ref in refs {
+            guard let url = PlacesService.shared.photoURL(reference: ref, maxWidth: 1600) else { continue }
+            do {
+                let (data, _) = try await URLSession.shared.data(from: url)
+                guard let image = UIImage(data: data) else { continue }
+                // Skip photos that don't look like menus/signs/specials boards
+                guard await PhotoScanService.shared.looksLikeMenuPhoto(image) else {
+                    print("PVAService photo pre-filter: skipped non-menu photo \(url.lastPathComponent)")
+                    continue
+                }
+                let recognized = try await PhotoScanService.shared.recognizeText(in: image)
+                if !recognized.isEmpty {
+                    results.append((text: recognized, photoURL: url))
+                }
+            } catch {
+                continue
+            }
+        }
+        return results
     }
 
     private func markExistingVenueClosed(placeId: String) async {
@@ -304,6 +482,103 @@ actor PVAService {
             latitude: (latIndex + 0.5) * cellSizeDegrees,
             longitude: (lngIndex + 0.5) * cellSizeDegrees
         )
+    }
+
+    // MARK: - Admin Region Refresh
+
+    /// Admin-triggered: rescan all existing venues in the area AND discover new ones.
+    /// Returns (rescanned existing count, new venues found).
+    static func refreshRegion(
+        coordinate: CLLocationCoordinate2D,
+        radiusMiles: Double,
+        userId: String
+    ) async -> (rescanned: Int, newVenues: Int) {
+        let firestoreService = FirestoreService.shared
+        let bounds = coordinate.boundingBox(radiusMiles: radiusMiles)
+
+        // 1. Fetch every venue already in the DB for this area
+        let existing = (try? await firestoreService.getVenuesInBounds(
+            minLat: bounds.minLat, maxLat: bounds.maxLat,
+            minLng: bounds.minLng, maxLng: bounds.maxLng
+        )) ?? []
+
+        // 2. Clear deals and re-scan each existing venue in background
+        for venue in existing {
+            Task.detached {
+                _ = try? await firestoreService.deleteDealsForVenue(id: venue.id)
+                try? await firestoreService.updateVenueField(id: venue.id, field: "dealCount", value: 0)
+                try? await firestoreService.updateVenueField(id: venue.id, field: "scanStatus",
+                                                             value: VenueScanStatus.pending.rawValue)
+                await PVAService.autoScanVenue(
+                    placeId: venue.placeId,
+                    venueId: venue.id,
+                    venueName: venue.name,
+                    venueAddress: venue.formattedAddress,
+                    venueLatitude: venue.latitude,
+                    venueLongitude: venue.longitude,
+                    userId: userId
+                )
+            }
+        }
+
+        // 3. Run a forced Places API search to find venues not yet in the DB
+        let newCount = await PVAService.shared.forceSearch(
+            coordinate: coordinate,
+            radiusMiles: radiusMiles,
+            userId: userId
+        )
+
+        return (rescanned: existing.count, newVenues: newCount)
+    }
+
+    /// Searches the Places API for the region regardless of cell staleness or daily limits.
+    /// Only adds venues not already in the DB.
+    func forceSearch(
+        coordinate: CLLocationCoordinate2D,
+        radiusMiles: Double,
+        userId: String
+    ) async -> Int {
+        let config = (try? await firestoreService.getPVAConfig()) ?? PVAConfig.default
+        let cellIds = gridCellIds(for: coordinate, radiusMiles: radiusMiles)
+        let bounds = coordinate.boundingBox(radiusMiles: radiusMiles)
+
+        let existingVenues = (try? await firestoreService.getVenuesInBounds(
+            minLat: bounds.minLat, maxLat: bounds.maxLat,
+            minLng: bounds.minLng, maxLng: bounds.maxLng
+        )) ?? []
+        let existingPlaceIds = Set(existingVenues.map { $0.placeId })
+
+        var newCount = 0
+        for cellId in cellIds {
+            let center = cellCenter(for: cellId)
+            guard let result = try? await searchCell(
+                center: center,
+                radiusMeters: Int(cellSizeDegrees * 111_320 * 1.5),
+                existingPlaceIds: existingPlaceIds,
+                config: config,
+                userId: userId
+            ) else { continue }
+
+            newCount += result.added
+
+            let existingCell = try? await firestoreService.getPVACell(id: cellId)
+            let updatedCell = PVACell(
+                id: cellId,
+                centerLatitude: center.latitude,
+                centerLongitude: center.longitude,
+                lastSearchedAt: Timestamp(),
+                venueCount: result.added + result.existing,
+                searchCount: (existingCell?.searchCount ?? 0) + 1,
+                isStale: false,
+                createdAt: existingCell?.createdAt ?? Timestamp()
+            )
+            try? await firestoreService.savePVACell(updatedCell)
+
+            for _ in 0..<result.apiCalls {
+                try? await firestoreService.incrementApiCallCount()
+            }
+        }
+        return newCount
     }
 
     // MARK: - Stale venue verification

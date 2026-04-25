@@ -39,12 +39,17 @@ class DealsViewModel: ObservableObject {
         errorMessage = nil
 
         do {
-            // Get location
+            // Get location — filter override wins over device location
             let location: CLLocation
             if let provided = providedLocation {
                 location = provided
             } else {
-                location = try await locationService.getCurrentLocation()
+                let query = filter.locationQuery.trimmingCharacters(in: .whitespaces)
+                if !query.isEmpty {
+                    location = try await Self.geocode(query)
+                } else {
+                    location = try await locationService.getCurrentLocation()
+                }
             }
             lastSearchLocation = location
 
@@ -113,7 +118,6 @@ class DealsViewModel: ObservableObject {
 
         venuesWithDeals = venues
             .filter { venue in
-                // Only show venues that have deals or are within radius
                 let hasDeals = (dealsByVenue[venue.id]?.isEmpty == false)
                 let inRadius = venue.distanceMiles(from: userLocation) <= filter.searchRadius
                 return hasDeals && inRadius
@@ -168,9 +172,13 @@ class DealsViewModel: ObservableObject {
     }
 
     func updateFilter(_ newFilter: SearchFilter) {
+        let previous = filter
         filter = newFilter
         applyFilter()
-        if newFilter.searchRadius != filter.searchRadius {
+
+        let locationChanged = previous.locationQuery != newFilter.locationQuery
+        let radiusChanged = previous.searchRadius != newFilter.searchRadius
+        if locationChanged || radiusChanged {
             Task { await searchDeals() }
         }
     }
@@ -188,12 +196,19 @@ class DealsViewModel: ObservableObject {
         } else {
             expandedVenueIds.insert(venueId)
         }
-        // Update the filtered list
-        filteredVenuesWithDeals = filteredVenuesWithDeals.map { vwd in
-            var updated = vwd
-            updated.isExpanded = expandedVenueIds.contains(vwd.id)
-            return updated
-        }
+    }
+
+    func expandAll() {
+        expandedVenueIds = Set(filteredVenuesWithDeals.map { $0.id })
+    }
+
+    func collapseAll() {
+        expandedVenueIds.removeAll()
+    }
+
+    var allExpanded: Bool {
+        !filteredVenuesWithDeals.isEmpty &&
+        filteredVenuesWithDeals.allSatisfy { expandedVenueIds.contains($0.id) }
     }
 
     // MARK: - Vote
@@ -228,5 +243,15 @@ class DealsViewModel: ObservableObject {
 
     var totalVenuesCount: Int {
         filteredVenuesWithDeals.count
+    }
+
+    // MARK: - Geocoding
+
+    private static func geocode(_ query: String) async throws -> CLLocation {
+        let placemarks = try await CLGeocoder().geocodeAddressString(query)
+        guard let location = placemarks.first?.location else {
+            throw LocationError.locationUnavailable
+        }
+        return location
     }
 }

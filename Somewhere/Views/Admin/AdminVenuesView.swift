@@ -2,11 +2,13 @@ import SwiftUI
 
 struct AdminVenuesView: View {
     @EnvironmentObject var viewModel: AdminViewModel
+    @EnvironmentObject var authService: AuthService
     @State private var searchQuery = ""
     @State private var filterClosed = false
     @State private var filterPending = false
     @State private var venueToDelete: Venue?
     @State private var showingDeleteAlert = false
+    @State private var showingScanAllConfirm = false
 
     private var filteredVenues: [Venue] {
         viewModel.venues.filter { venue in
@@ -40,12 +42,23 @@ struct AdminVenuesView: View {
 
             List {
                 ForEach(filteredVenues) { venue in
-                    AdminVenueRow(venue: venue) {
-                        // Mark closed
-                        Task { await viewModel.markVenueClosed(id: venue.id) }
-                    } onDelete: {
-                        venueToDelete = venue
-                        showingDeleteAlert = true
+                    NavigationLink(destination:
+                        AdminVenueDetailView(venue: venue)
+                            .environmentObject(viewModel)
+                            .environmentObject(authService)
+                    ) {
+                        AdminVenueRow(
+                            venue: venue,
+                            onMarkClosed: { Task { await viewModel.markVenueClosed(id: venue.id) } },
+                            onRescan: {
+                                guard let uid = authService.currentUser?.id else { return }
+                                Task { await viewModel.rescanVenue(venue, currentUserId: uid) }
+                            },
+                            onDelete: {
+                                venueToDelete = venue
+                                showingDeleteAlert = true
+                            }
+                        )
                     }
                 }
             }
@@ -54,6 +67,27 @@ struct AdminVenuesView: View {
         .background(Color.appBackground.ignoresSafeArea())
         .navigationTitle("Venues (\(viewModel.totalVenues))")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .navigationBarTrailing) {
+                Button {
+                    showingScanAllConfirm = true
+                } label: {
+                    Label("Scan All", systemImage: "arrow.clockwise.circle")
+                }
+            }
+        }
+        .confirmationDialog(
+            "Scan unscanned venues?",
+            isPresented: $showingScanAllConfirm
+        ) {
+            Button("Scan Next 50 Venues (any location)") {
+                guard let uid = authService.currentUser?.id else { return }
+                Task { await viewModel.scanAllUnscannedVenues(userId: uid, batchSize: 50) }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Fires background scans for up to 50 unscanned venues. To restrict by location, use PVA Controls → Bulk Deal Scan.")
+        }
         .alert("Delete Venue", isPresented: $showingDeleteAlert) {
             Button("Delete", role: .destructive) {
                 if let venue = venueToDelete {
@@ -75,6 +109,7 @@ struct AdminVenuesView: View {
 struct AdminVenueRow: View {
     let venue: Venue
     let onMarkClosed: () -> Void
+    let onRescan: () -> Void
     let onDelete: () -> Void
 
     var body: some View {
@@ -125,6 +160,7 @@ struct AdminVenueRow: View {
             Spacer()
 
             Menu {
+                Button("Rescan for Deals", systemImage: "arrow.clockwise") { onRescan() }
                 if !venue.isPermanentlyClosed {
                     Button("Mark as Closed") { onMarkClosed() }
                 }
@@ -151,5 +187,137 @@ struct AdminVenueRow: View {
         return Text(label)
             .font(.system(size: 9, weight: .semibold))
             .foregroundColor(color)
+    }
+}
+
+// MARK: - Venue Detail View
+
+struct AdminVenueDetailView: View {
+    let venue: Venue
+    @EnvironmentObject var viewModel: AdminViewModel
+    @EnvironmentObject var authService: AuthService
+    @State private var deals: [Deal] = []
+    @State private var isLoading = true
+    @State private var dealToDelete: Deal?
+    @State private var showingDeleteDealConfirm = false
+    @State private var showingVenueDeleteConfirm = false
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        List {
+            // Venue header
+            Section {
+                HStack(spacing: 12) {
+                    VenuePhotoView(photoReference: venue.photoReference, maxWidth: 60)
+                        .frame(width: 60, height: 60)
+                        .clipShape(RoundedRectangle(cornerRadius: 10))
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(venue.name).font(.appHeadline)
+                        Text(venue.formattedAddress).font(.appCaption).foregroundColor(.appSubtext)
+                        HStack(spacing: 6) {
+                            Text(venue.category.displayName).font(.appCaption2).foregroundColor(.appSubtext)
+                            Text("·")
+                            scanStatusText(venue.scanStatus)
+                            Text("·")
+                            Text("\(deals.count) deal\(deals.count == 1 ? "" : "s")").font(.appCaption2).foregroundColor(.appSubtext)
+                        }
+                    }
+                }
+                .padding(.vertical, 4)
+            }
+
+            // Actions
+            Section {
+                Button {
+                    guard let uid = authService.currentUser?.id else { return }
+                    Task { await viewModel.rescanVenue(venue, currentUserId: uid) }
+                } label: {
+                    Label("Rescan for Deals", systemImage: "arrow.clockwise")
+                        .foregroundColor(.appPrimary)
+                }
+                if !venue.isPermanentlyClosed {
+                    Button {
+                        Task { await viewModel.markVenueClosed(id: venue.id) }
+                    } label: {
+                        Label("Mark as Permanently Closed", systemImage: "xmark.circle")
+                            .foregroundColor(.appWarning)
+                    }
+                }
+                Button(role: .destructive) {
+                    showingVenueDeleteConfirm = true
+                } label: {
+                    Label("Delete Venue & All Deals", systemImage: "trash")
+                }
+            }
+
+            // Deals
+            Section {
+                if isLoading {
+                    HStack { Spacer(); ProgressView(); Spacer() }.padding()
+                } else if deals.isEmpty {
+                    Text("No deals found for this venue.")
+                        .font(.appCaption)
+                        .foregroundColor(.appSubtext)
+                        .padding(.vertical, 8)
+                } else {
+                    ForEach(deals) { deal in
+                        VStack(spacing: 0) {
+                            AdminDealCard(deal: deal) {
+                                dealToDelete = deal
+                                showingDeleteDealConfirm = true
+                            }
+                            Divider().padding(.leading, 16)
+                        }
+                        .listRowInsets(EdgeInsets())
+                        .listRowSeparator(.hidden)
+                    }
+                }
+            } header: {
+                Text("Deals")
+            }
+        }
+        .listStyle(.insetGrouped)
+        .navigationTitle(venue.name)
+        .navigationBarTitleDisplayMode(.inline)
+        .onAppear { Task { await loadDeals() } }
+        .confirmationDialog("Delete deal?", isPresented: $showingDeleteDealConfirm) {
+            Button("Delete", role: .destructive) {
+                if let d = dealToDelete { Task { await deleteDeal(d) } }
+            }
+        }
+        .confirmationDialog("Delete \(venue.name)?", isPresented: $showingVenueDeleteConfirm) {
+            Button("Delete Venue & All Deals", role: .destructive) {
+                Task {
+                    await viewModel.deleteVenue(id: venue.id)
+                    dismiss()
+                }
+            }
+        } message: {
+            Text("This permanently deletes the venue and all its deals.")
+        }
+    }
+
+    private func loadDeals() async {
+        isLoading = true
+        deals = (try? await FirestoreService.shared.getAllDealsForVenue(venueId: venue.id)) ?? []
+        isLoading = false
+    }
+
+    private func deleteDeal(_ deal: Deal) async {
+        try? await FirestoreService.shared.deleteDeal(id: deal.id, venueId: venue.id)
+        deals.removeAll { $0.id == deal.id }
+    }
+
+    private func scanStatusText(_ status: VenueScanStatus) -> some View {
+        let (label, color): (String, Color) = {
+            switch status {
+            case .pending:  return ("Pending Scan", .appWarning)
+            case .scanning: return ("Scanning", .appPrimary)
+            case .scanned:  return ("Scanned", .appSuccess)
+            case .failed:   return ("Scan Failed", .appError)
+            case .noDeals:  return ("No Deals Found", .appSubtext)
+            }
+        }()
+        return Text(label).font(.appCaption2).foregroundColor(color)
     }
 }

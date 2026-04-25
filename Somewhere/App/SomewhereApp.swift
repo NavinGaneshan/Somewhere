@@ -1,6 +1,5 @@
 import SwiftUI
 import FirebaseCore
-import FirebaseAppCheck
 import GoogleSignIn
 
 @main

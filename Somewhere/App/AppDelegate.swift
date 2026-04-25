@@ -9,13 +9,10 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         _ application: UIApplication,
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
-        // Configure Firebase App Check (using DeviceCheck in production, Debug in dev)
+        // Use debug App Check provider on simulator/debug builds so DeviceCheck errors
+        // don't block Firestore. Production builds use DeviceCheck automatically.
         #if DEBUG
-        let providerFactory = AppCheckDebugProviderFactory()
-        AppCheck.setAppCheckProviderFactory(providerFactory)
-        #else
-        let providerFactory = DeviceCheckProviderFactory()
-        AppCheck.setAppCheckProviderFactory(providerFactory)
+        AppCheck.setAppCheckProviderFactory(AppCheckDebugProviderFactory())
         #endif
 
         // Initialize Firebase

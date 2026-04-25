@@ -223,6 +223,58 @@ struct Deal: Codable, Identifiable, Equatable {
 
 // MARK: - Deal + Firestore
 extension Deal {
+    static func fromFirestore(_ data: [String: Any], id: String) -> Deal? {
+        guard
+            let venueId = data["venueId"] as? String,
+            let venueName = data["venueName"] as? String,
+            let title = data["title"] as? String,
+            let description = data["description"] as? String,
+            let categoryRaw = data["category"] as? String,
+            let category = DealCategory(rawValue: categoryRaw),
+            let daysRaw = data["days"] as? [String],
+            let startTime = data["startTime"] as? String,
+            let endTime = data["endTime"] as? String,
+            let sourceRaw = data["source"] as? String,
+            let source = DealSource(rawValue: sourceRaw),
+            let statusRaw = data["status"] as? String,
+            let status = DealStatus(rawValue: statusRaw),
+            let createdBy = data["createdBy"] as? String,
+            let createdAt = data["createdAt"] as? Timestamp,
+            let updatedAt = data["updatedAt"] as? Timestamp
+        else { return nil }
+
+        let days = daysRaw.compactMap { DayOfWeek(rawValue: $0) }
+
+        return Deal(
+            id: (data["id"] as? String) ?? id,
+            venueId: venueId,
+            venueName: venueName,
+            venueAddress: (data["venueAddress"] as? String) ?? "",
+            venueLatitude: (data["venueLatitude"] as? Double) ?? 0,
+            venueLongitude: (data["venueLongitude"] as? Double) ?? 0,
+            title: title,
+            description: description,
+            category: category,
+            days: days,
+            startTime: startTime,
+            endTime: endTime,
+            source: source,
+            status: status,
+            isVerified: (data["isVerified"] as? Bool) ?? false,
+            upvotes: (data["upvotes"] as? Int) ?? 0,
+            downvotes: (data["downvotes"] as? Int) ?? 0,
+            reportCount: (data["reportCount"] as? Int) ?? 0,
+            imageURL: data["imageURL"] as? String,
+            sourceURL: data["sourceURL"] as? String,
+            createdBy: createdBy,
+            createdByName: data["createdByName"] as? String,
+            createdAt: createdAt,
+            updatedAt: updatedAt,
+            expiresAt: data["expiresAt"] as? Timestamp,
+            adminNotes: data["adminNotes"] as? String
+        )
+    }
+
     func toFirestore() -> [String: Any] {
         var dict: [String: Any] = [
             "id": id,

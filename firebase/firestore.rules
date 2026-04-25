@@ -9,6 +9,7 @@ service cloud.firestore {
 
     function isAdmin() {
       return isAuthenticated() &&
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ['admin', 'moderator'];
     }
 
@@ -18,6 +19,7 @@ service cloud.firestore {
 
     function isBanned() {
       return isAuthenticated() &&
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.isBanned == true;
     }
 
@@ -84,16 +86,24 @@ service cloud.firestore {
       // Public read (for map overlays)
       allow read: if true;
 
-      // Only Cloud Functions and admins write PVA cells
-      allow write: if isAdmin();
+      // PVA bookkeeping — any authenticated client can record cell searches.
+      // These are counters with no sensitive data; abuse risk is limited to polluting the grid.
+      allow create, update: if isAuthenticated();
+      allow delete: if isAdmin();
     }
 
     // ========================================================
-    // CONFIG (admin only)
+    // CONFIG
     // ========================================================
     match /config/{configId} {
       allow read: if isAdmin() || configId == 'pva';  // PVA config readable for app-level throttling
-      allow write: if isAdmin();
+
+      // Authenticated clients can only bump the daily API counter on config/pva.
+      // All other fields and other config docs remain admin-only.
+      allow update: if isAuthenticated()
+        && configId == 'pva'
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['dailyApiCallCount', 'updatedAt']);
+      allow create, delete: if isAdmin();
     }
 
     // ========================================================

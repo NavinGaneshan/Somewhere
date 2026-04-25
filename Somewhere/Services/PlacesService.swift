@@ -30,11 +30,13 @@ private struct PlacesResponse: Codable {
     let results: [PlaceResult]
     let nextPageToken: String?
     let status: String
+    let errorMessage: String?
 
     enum CodingKeys: String, CodingKey {
         case results
         case nextPageToken = "next_page_token"
         case status
+        case errorMessage = "error_message"
     }
 }
 
@@ -74,10 +76,18 @@ private struct PlacePhoto: Codable {
     let photoReference: String
     let height: Int
     let width: Int
+    let htmlAttributions: [String]?
 
     enum CodingKeys: String, CodingKey {
         case photoReference = "photo_reference"
         case height, width
+        case htmlAttributions = "html_attributions"
+    }
+
+    /// Owner-posted photos (attributed to the business) come first — they're most likely to be menus.
+    func ownerScore(venueName: String) -> Int {
+        let attrText = (htmlAttributions ?? []).joined().lowercased()
+        return (attrText.contains(venueName.lowercased()) || attrText.isEmpty) ? 1 : 0
     }
 }
 
@@ -146,6 +156,11 @@ class PlacesService {
         let (data, _) = try await session.data(from: url)
         let response = try decoder.decode(PlacesResponse.self, from: data)
 
+        print("PlacesService nearbysearch at \(location.latitude),\(location.longitude) r=\(radiusMeters)m → status=\(response.status) results=\(response.results.count)")
+        if let errMsg = response.errorMessage {
+            print("PlacesService error_message: \(errMsg)")
+        }
+
         guard response.status == "OK" || response.status == "ZERO_RESULTS" else {
             throw PlacesError.apiError(response.status)
         }
@@ -203,6 +218,21 @@ class PlacesService {
     /// Build photo URL from photo reference
     func photoURL(reference: String, maxWidth: Int = 400) -> URL? {
         URL(string: "\(baseURL)/photo?maxwidth=\(maxWidth)&photoreference=\(reference)&key=\(apiKey)")
+    }
+
+    /// Photo references for a place, prioritized by likelihood of being a menu/specials image.
+    /// Portrait photos and owner-attributed photos score higher (approximates the Maps "Menu" tab).
+    func getPlacePhotoReferences(placeId: String, venueName: String = "", limit: Int = 10) async throws -> [String] {
+        let urlString = "\(baseURL)/details/json?place_id=\(placeId)&fields=photos&key=\(apiKey)"
+        guard let url = URL(string: urlString) else { throw URLError(.badURL) }
+        let (data, _) = try await session.data(from: url)
+        let response = try decoder.decode(PlaceDetailsResponse.self, from: data)
+        guard response.status == "OK" else { return [] }
+        let photos = response.result.photos ?? []
+        return photos
+            .sorted { $0.ownerScore(venueName: venueName) > $1.ownerScore(venueName: venueName) }
+            .prefix(limit)
+            .map { $0.photoReference }
     }
 
     // MARK: - Text Search (for website scraping target)
