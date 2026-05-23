@@ -82,12 +82,15 @@ struct SearchFilter: Equatable {
     var sortOption: SortOption
     var showOnlyVerified: Bool
     var showOnlyActiveNow: Bool
+    var showOnlyFavorites: Bool
     var searchQuery: String                   // text search in name/description
     var locationQuery: String                 // city or zip; empty = use device location
 
+    static let defaultCategories: Set<DealCategory> = [.food, .drinks]
+
     static var `default`: SearchFilter {
         SearchFilter(
-            categories: [],
+            categories: defaultCategories,
             venueCategories: [],
             timeFilter: .anytime,
             selectedDays: [],
@@ -97,6 +100,7 @@ struct SearchFilter: Equatable {
             sortOption: .distance,
             showOnlyVerified: false,
             showOnlyActiveNow: false,
+            showOnlyFavorites: false,
             searchQuery: "",
             locationQuery: ""
         )
@@ -111,12 +115,13 @@ struct SearchFilter: Equatable {
     }
 
     var isFiltered: Bool {
-        !categories.isEmpty ||
+        categories != Self.defaultCategories ||
         !venueCategories.isEmpty ||
         timeFilter != .anytime ||
         !selectedDays.isEmpty ||
         showOnlyVerified ||
         showOnlyActiveNow ||
+        showOnlyFavorites ||
         !searchQuery.isEmpty ||
         !locationQuery.isEmpty ||
         searchRadius != 1.0
@@ -124,12 +129,13 @@ struct SearchFilter: Equatable {
 
     var activeFilterCount: Int {
         var count = 0
-        if !categories.isEmpty { count += 1 }
+        if categories != Self.defaultCategories { count += 1 }
         if !venueCategories.isEmpty { count += 1 }
         if timeFilter != .anytime { count += 1 }
         if !selectedDays.isEmpty { count += 1 }
         if showOnlyVerified { count += 1 }
         if showOnlyActiveNow { count += 1 }
+        if showOnlyFavorites { count += 1 }
         if !locationQuery.isEmpty { count += 1 }
         if searchRadius != 1.0 { count += 1 }
         return count

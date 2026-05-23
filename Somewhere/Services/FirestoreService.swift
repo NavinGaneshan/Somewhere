@@ -161,9 +161,11 @@ class FirestoreService {
     func getAllDealsForVenue(venueId: String) async throws -> [Deal] {
         let snapshot = try await dealsRef
             .whereField("venueId", isEqualTo: venueId)
-            .order(by: "createdAt", descending: true)
             .getDocuments()
-        return snapshot.documents.compactMap { try? $0.data(as: Deal.self) }
+        // Sort in memory to avoid requiring a composite Firestore index
+        return snapshot.documents
+            .compactMap { try? $0.data(as: Deal.self) }
+            .sorted { $0.createdAt.dateValue() > $1.createdAt.dateValue() }
     }
 
     /// Get all active deals for venues within bounds (fetched after venue geo-query)

@@ -1,26 +1,31 @@
 import SwiftUI
 
-// MARK: - App Colors
+// MARK: - App Colors  (dark "Ink" theme)
 extension Color {
-    static let appPrimary = Color("AppPrimary")      // Deep teal/navy
-    static let appAccent = Color("AppAccent")         // Warm orange/gold
-    static let appBackground = Color("AppBackground") // Off-white
-    static let appSurface = Color("AppSurface")       // Card white
-    static let appText = Color("AppText")             // Near-black
-    static let appSubtext = Color("AppSubtext")       // Medium gray
-    static let appDivider = Color("AppDivider")       // Light gray
-    static let appSuccess = Color("AppSuccess")       // Green
-    static let appWarning = Color("AppWarning")       // Amber
-    static let appError = Color("AppError")           // Red
+    static let appPrimary    = Color(hex: "#E87A2C")   // Amber
+    static let appAccent     = Color(hex: "#E87A2C")   // Amber
+    static let appBackground = Color(hex: "#191613")   // Ink
+    static let appSurface    = Color(hex: "#221E1A")   // Dark card
+    static let appText       = Color(hex: "#F2ECE0")   // Paper
+    static let appSubtext    = Color(hex: "#8C7E72")   // Warm gray
+    static let appDivider    = Color(hex: "#2D2824")   // Dark divider
+    static let appSuccess    = Color(hex: "#4C7A3E")   // Olive
+    static let appWarning    = Color(hex: "#E8A838")   // Warm amber
+    static let appError      = Color(hex: "#C0392B")   // Red
 
     // Category colors
-    static let drinkColor = Color(hex: "#4A90D9")     // Blue
-    static let foodColor = Color(hex: "#E8A838")      // Orange
-    static let activityColor = Color(hex: "#7B68EE")  // Purple
+    static let drinkColor    = Color(hex: "#4A90D9")
+    static let foodColor     = Color(hex: "#E8A838")
+    static let activityColor = Color(hex: "#9B88EE")
 
     // Active/inactive deal indicator
-    static let activeGreen = Color(hex: "#27AE60")
-    static let inactiveGray = Color(hex: "#95A5A6")
+    static let activeGreen  = Color(hex: "#4C7A3E")   // Olive
+    static let inactiveGray = Color(hex: "#5A5248")
+
+    // Design tokens
+    static let appCard       = Color(hex: "#221E1A")
+    static let appAccentDeep = Color(hex: "#B85E1A")
+    static let appMute       = Color(hex: "#5A4E45")
 
     init(hex: String) {
         let hex = hex.trimmingCharacters(in: CharacterSet.alphanumerics.inverted)

@@ -10,26 +10,6 @@ struct FilterSheetView: View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 24) {
-                    // Quick Filters
-                    filterSection("Quick Filters") {
-                        LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
-                            ForEach(TimeFilter.allCases) { timeFilter in
-                                QuickFilterButton(
-                                    title: timeFilter.displayName,
-                                    icon: timeFilter.icon,
-                                    isSelected: localFilter.timeFilter == timeFilter
-                                ) {
-                                    localFilter.timeFilter = timeFilter
-                                    if timeFilter == .now {
-                                        localFilter.showOnlyActiveNow = true
-                                    } else {
-                                        localFilter.showOnlyActiveNow = false
-                                    }
-                                }
-                            }
-                        }
-                    }
-
                     // Deal Categories
                     filterSection("Deal Type") {
                         HStack(spacing: 10) {
@@ -63,24 +43,6 @@ struct FilterSheetView: View {
                                         localFilter.selectedDays.insert(day)
                                     }
                                 }
-                            }
-                        }
-                    }
-
-                    // Custom Time Range
-                    if localFilter.timeFilter == .custom {
-                        filterSection("Custom Time Range") {
-                            HStack(spacing: 16) {
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text("From").font(.appCaption).foregroundColor(.appSubtext)
-                                    TimePickerField(time: $localFilter.customStartTime)
-                                }
-                                Text("to").font(.appSubheadline).foregroundColor(.appSubtext)
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text("To").font(.appCaption).foregroundColor(.appSubtext)
-                                    TimePickerField(time: $localFilter.customEndTime)
-                                }
-                                Spacer()
                             }
                         }
                     }
@@ -166,7 +128,7 @@ struct FilterSheetView: View {
                                     localFilter.sortOption = option
                                 } label: {
                                     Text(option.displayName)
-                                        .font(.appCaption.weight(.medium))
+                                        .font(.appCaption)
                                         .padding(.horizontal, 12)
                                         .padding(.vertical, 7)
                                         .background(localFilter.sortOption == option ? Color.appPrimary : Color.appSurface)
@@ -241,7 +203,7 @@ struct QuickFilterButton: View {
         Button(action: action) {
             HStack(spacing: 8) {
                 Image(systemName: icon).font(.system(size: 14))
-                Text(title).font(.appCaption.weight(.medium))
+                Text(title).font(.appCaption)
             }
             .frame(maxWidth: .infinity)
             .padding(.vertical, 10)
@@ -264,8 +226,8 @@ struct CategoryToggleButton: View {
     var body: some View {
         Button(action: action) {
             HStack(spacing: 6) {
-                Text(category.icon).font(.system(size: 16))
-                Text(category.displayName).font(.appCaption.weight(.medium))
+                Image(systemName: category.icon).font(.system(size: 15))
+                Text(category.displayName).font(.appCaption)
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 8)
@@ -307,7 +269,7 @@ struct VenueCategoryButton: View {
     var body: some View {
         Button(action: action) {
             VStack(spacing: 4) {
-                Text(category.icon).font(.system(size: 18))
+                Image(systemName: category.icon).font(.system(size: 16))
                 Text(category.displayName).font(.system(size: 10, weight: .medium)).lineLimit(1)
             }
             .frame(maxWidth: .infinity)
@@ -328,7 +290,7 @@ struct TimePickerField: View {
 
     var body: some View {
         Text(time.formattedTime)
-            .font(.appSubheadline.weight(.semibold))
+            .font(.appSubheadlineSemiBold)
             .padding(.horizontal, 14)
             .padding(.vertical, 8)
             .background(Color.appSurface)

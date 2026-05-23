@@ -11,6 +11,7 @@ struct AdminPVAView: View {
     @State private var showingRescanConfirm = false
 
     @State private var showingNukeConfirm = false
+    @State private var showingDedupeConfirm = false
 
     // Rescan Venue
     @State private var venueSearch = ""
@@ -58,7 +59,7 @@ struct AdminPVAView: View {
             Section {
                 Toggle(isOn: $viewModel.pvaConfig.pvaModeEnabled) {
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("Enable PVA").font(.appSubheadline.weight(.semibold))
+                        Text("Enable PVA").font(.appSubheadlineSemiBold)
                         Text("Progressive Venue Addition system").font(.appCaption).foregroundColor(.appSubtext)
                     }
                 }
@@ -74,7 +75,7 @@ struct AdminPVAView: View {
                     Spacer()
                     Text("\(viewModel.pvaConfig.dailyApiCallCount) / \(viewModel.pvaConfig.maxPlacesApiCallsPerDay)")
                         .foregroundColor(viewModel.pvaConfig.dailyApiCallCount > Int(Double(viewModel.pvaConfig.maxPlacesApiCallsPerDay) * 0.8) ? .appError : .appText)
-                        .font(.appSubheadline.weight(.semibold))
+                        .font(.appSubheadlineSemiBold)
                 }
 
                 ProgressView(value: Double(viewModel.pvaConfig.dailyApiCallCount) / Double(max(viewModel.pvaConfig.maxPlacesApiCallsPerDay, 1)))
@@ -299,6 +300,16 @@ struct AdminPVAView: View {
 
             // Danger Zone
             Section {
+                Button {
+                    showingDedupeConfirm = true
+                } label: {
+                    HStack {
+                        Image(systemName: "arrow.triangle.2.circlepath")
+                        Text("Remove Duplicate Venues")
+                    }
+                }
+                .foregroundColor(.appWarning)
+
                 Button(role: .destructive) {
                     showingNukeConfirm = true
                 } label: {
@@ -310,7 +321,7 @@ struct AdminPVAView: View {
             } header: {
                 Text("Danger Zone")
             } footer: {
-                Text("Permanently deletes every venue and deal record. Cannot be undone. Use before importing a fresh dataset.")
+                Text("Deduplication groups venues by Place ID and removes extras, keeping whichever copy has the most deals.")
             }
 
             // Save
@@ -330,6 +341,9 @@ struct AdminPVAView: View {
                 .listRowBackground(Color.appPrimary)
             }
         }
+        .scrollContentBackground(.hidden)
+        .background(Color.appBackground.ignoresSafeArea())
+        .environment(\.colorScheme, .dark)
         .navigationTitle("PVA Controls")
         .navigationBarTitleDisplayMode(.inline)
         .confirmationDialog("Scan unscanned venues?", isPresented: $showingBulkScanConfirm) {
@@ -376,6 +390,14 @@ struct AdminPVAView: View {
                 Text("This will delete all existing deals for \(venue.name) and start a fresh scan. The venue stays in the database.")
             }
         }
+        .confirmationDialog("Remove duplicate venues?", isPresented: $showingDedupeConfirm) {
+            Button("Remove Duplicates", role: .destructive) {
+                Task { await viewModel.deduplicateVenues() }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Scans all venues, groups by Place ID, and deletes extras (keeping the copy with the most deals). This cannot be undone.")
+        }
         .confirmationDialog("Delete ALL venues and deals?", isPresented: $showingNukeConfirm) {
             Button("Delete Everything", role: .destructive) {
                 Task { await viewModel.deleteAllVenuesAndDeals() }
@@ -389,7 +411,7 @@ struct AdminPVAView: View {
                 VStack {
                     Spacer()
                     Text(success)
-                        .font(.appSubheadline.weight(.medium))
+                        .font(.appSubheadlineMedium)
                         .foregroundColor(.white)
                         .padding(.horizontal, 20)
                         .padding(.vertical, 12)

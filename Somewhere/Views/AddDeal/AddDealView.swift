@@ -9,9 +9,9 @@ struct AddDealView: View {
     @State private var showingSuccessAlert = false
 
     enum DealSourceOption: String, CaseIterable {
-        case photo = "Scan Photo"
-        case website = "Scan Website"
-        case manual = "Enter Manually"
+        case photo = "Snap"
+        case website = "Link"
+        case manual = "Manual"
 
         var icon: String {
             switch self {
@@ -24,42 +24,61 @@ struct AddDealView: View {
 
     var body: some View {
         ScrollView {
-            VStack(spacing: 24) {
-                // Header
-                headerSection
+            VStack(spacing: 0) {
+                // Step 1 — Select Venue
+                StepHeader(number: 1, title: "Select the spot", isComplete: viewModel.selectedVenue != nil)
+                    .padding(.horizontal, 16)
+                    .padding(.top, 16)
+                    .padding(.bottom, 8)
 
-                // Source selector
-                sourcePicker
-
-                // Source-specific input
-                switch selectedSource {
-                case .photo:
-                    PhotoScanSection(viewModel: viewModel)
-                case .website:
-                    WebScanSection(viewModel: viewModel)
-                case .manual:
-                    EmptyView()
-                }
-
-                // Venue selector
                 venueSection
+                    .padding(.horizontal, 16)
 
-                // Deal form (shown after scan or for manual)
-                if viewModel.selectedVenue != nil || selectedSource == .manual {
+                // Step 2 — Source
+                StepHeader(number: 2, title: "Add the deal", isComplete: step2Complete)
+                    .padding(.horizontal, 16)
+                    .padding(.top, 20)
+                    .padding(.bottom, 8)
+
+                sourcePicker
+                    .padding(.horizontal, 16)
+
+                Group {
+                    switch selectedSource {
+                    case .photo:
+                        PhotoScanSection(viewModel: viewModel)
+                    case .website:
+                        WebScanSection(viewModel: viewModel)
+                    case .manual:
+                        EmptyView()
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.top, 12)
+
+                // Step 3 — Review & Submit
+                StepHeader(number: 3, title: "Review & submit", isComplete: false)
+                    .padding(.horizontal, 16)
+                    .padding(.top, 20)
+                    .padding(.bottom, 8)
+
+                if !hasBulkPhotoDeals && (viewModel.selectedVenue != nil || selectedSource == .manual) {
                     DealFormSection(viewModel: viewModel)
+                        .padding(.horizontal, 16)
                 }
 
-                // Submit button
-                if viewModel.selectedVenue != nil {
-                    submitButton
+                if hasBulkPhotoDeals && viewModel.selectedVenue != nil {
+                    bulkSubmitButton.padding(.horizontal, 16)
+                } else if !hasBulkPhotoDeals && viewModel.selectedVenue != nil {
+                    submitButton.padding(.horizontal, 16)
                 }
 
-                // Success/error messages
                 if let error = viewModel.errorMessage {
-                    ErrorBanner(message: error)
+                    ErrorBanner(message: error).padding(.horizontal, 16)
                 }
+
+                Spacer(minLength: 24)
             }
-            .padding(16)
         }
         .background(Color.appBackground.ignoresSafeArea())
         .navigationTitle("Add a Deal")
@@ -70,36 +89,27 @@ struct AddDealView: View {
                     .foregroundColor(.appSubtext)
             }
         }
-        .alert("Deal Submitted!", isPresented: $showingSuccessAlert) {
-            Button("Add Another") { viewModel.resetForm() }
+        .alert("Shared!", isPresented: $showingSuccessAlert) {
+            Button("Share another") { viewModel.resetForm() }
             Button("Done") { dismiss() }
         } message: {
-            Text(viewModel.successMessage ?? "Your deal has been submitted.")
+            Text(viewModel.successMessage ?? "Thanks for contributing. We'll review it soon.")
         }
         .onChange(of: viewModel.successMessage) { msg in
             if msg != nil { showingSuccessAlert = true }
         }
     }
 
-    // MARK: - Header
+    private var hasBulkPhotoDeals: Bool {
+        selectedSource == .photo && !(viewModel.scanResult?.extractedDeals.isEmpty ?? true)
+    }
 
-    private var headerSection: some View {
-        VStack(spacing: 8) {
-            Image(systemName: "plus.circle.fill")
-                .font(.system(size: 44))
-                .foregroundStyle(.linearGradient(
-                    colors: [Color.appPrimary, Color.appAccent],
-                    startPoint: .topLeading, endPoint: .bottomTrailing
-                ))
-            Text("Share a Happy Hour Deal")
-                .font(.appTitle3)
-                .foregroundColor(.appText)
-            Text("Scan a photo, website, or enter details manually")
-                .font(.appSubheadline)
-                .foregroundColor(.appSubtext)
-                .multilineTextAlignment(.center)
+    private var step2Complete: Bool {
+        switch selectedSource {
+        case .photo: return viewModel.selectedImage != nil
+        case .website: return viewModel.webScanResult != nil
+        case .manual: return !viewModel.title.isEmpty
         }
-        .padding(.top, 8)
     }
 
     // MARK: - Source Picker
@@ -112,6 +122,8 @@ struct AddDealView: View {
                         selectedSource = option
                         viewModel.scanResult = nil
                         viewModel.webScanResult = nil
+                        viewModel.selectedImage = nil
+                        viewModel.imageItem = nil
                     }
                 } label: {
                     VStack(spacing: 6) {
@@ -138,9 +150,9 @@ struct AddDealView: View {
 
     private var venueSection: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Label("Venue", systemImage: "building.2.fill")
-                .font(.appHeadline)
-                .foregroundColor(.appText)
+            Label("Where?", systemImage: "building.2.fill")
+                .font(.appTitle3)
+                .foregroundColor(.appPrimary)
 
             if let venue = viewModel.selectedVenue {
                 SelectedVenueRow(venue: venue) {
@@ -153,7 +165,7 @@ struct AddDealView: View {
                     HStack {
                         Image(systemName: "magnifyingglass")
                             .foregroundColor(.appSubtext)
-                        Text("Search for a venue...")
+                        Text("Which spot?")
                             .foregroundColor(.appSubtext)
                         Spacer()
                         Image(systemName: "chevron.right")
@@ -172,7 +184,30 @@ struct AddDealView: View {
         }
     }
 
-    // MARK: - Submit Button
+    // MARK: - Submit Buttons
+
+    private var bulkSubmitButton: some View {
+        let checked = viewModel.checkedDealIndices.count
+        return Button {
+            Task { await viewModel.submitCheckedDeals() }
+        } label: {
+            HStack {
+                if viewModel.isLoading {
+                    ProgressView().tint(.white)
+                } else {
+                    Image(systemName: "checkmark.circle.fill")
+                    Text(checked == 0 ? "Select deals above" : "Add \(checked) deal\(checked == 1 ? "" : "s")")
+                        .font(.appHeadline)
+                }
+            }
+            .frame(maxWidth: .infinity)
+            .frame(height: 54)
+            .background(checked > 0 ? Color.appPrimary : Color.gray.opacity(0.4))
+            .foregroundColor(.white)
+            .cornerRadius(14)
+        }
+        .disabled(checked == 0 || viewModel.isLoading)
+    }
 
     private var submitButton: some View {
         Button {
@@ -183,7 +218,7 @@ struct AddDealView: View {
                     ProgressView().tint(.white)
                 } else {
                     Image(systemName: "checkmark.circle.fill")
-                    Text("Submit Deal")
+                    Text("Share it")
                         .font(.appHeadline)
                 }
             }
@@ -206,9 +241,9 @@ struct PhotoScanSection: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Label("Scan Menu or Sign", systemImage: "camera.fill")
-                .font(.appHeadline)
-                .foregroundColor(.appText)
+            Label("Read the menu", systemImage: "camera.fill")
+                .font(.appTitle3)
+                .foregroundColor(.appPrimary)
 
             if let image = viewModel.selectedImage {
                 // Show scanned image
@@ -249,14 +284,23 @@ struct PhotoScanSection: View {
                             .foregroundColor(.appSubtext)
                     } else {
                         VStack(alignment: .leading, spacing: 8) {
-                            Text("\(result.extractedDeals.count) deal\(result.extractedDeals.count == 1 ? "" : "s") detected")
-                                .font(.appCaption.weight(.semibold))
-                                .foregroundColor(.appSuccess)
-                            ForEach(result.extractedDeals.indices, id: \.self) { idx in
-                                let deal = result.extractedDeals[idx]
-                                ExtractedDealRow(deal: deal) {
-                                    viewModel.applyScanResult(deal)
+                            HStack {
+                                Text("\(result.extractedDeals.count) deal\(result.extractedDeals.count == 1 ? "" : "s") detected")
+                                    .font(.appCaptionSemiBold)
+                                    .foregroundColor(.appSuccess)
+                                Spacer()
+                                Button(viewModel.checkedDealIndices.count == result.extractedDeals.count ? "Deselect All" : "Select All") {
+                                    if viewModel.checkedDealIndices.count == result.extractedDeals.count {
+                                        viewModel.checkedDealIndices = []
+                                    } else {
+                                        viewModel.checkedDealIndices = Set(0..<result.extractedDeals.count)
+                                    }
                                 }
+                                .font(.appCaptionSemiBold)
+                                .foregroundColor(.appPrimary)
+                            }
+                            ForEach(result.extractedDeals.indices, id: \.self) { idx in
+                                CheckableDealRow(deal: result.extractedDeals[idx], index: idx, viewModel: viewModel)
                             }
                         }
                         .padding(12)
@@ -269,7 +313,7 @@ struct PhotoScanSection: View {
                 HStack(spacing: 12) {
                     PhotosPicker(selection: $viewModel.imageItem, matching: .images) {
                         Label("Photo Library", systemImage: "photo.on.rectangle")
-                            .font(.appSubheadline.weight(.medium))
+                            .font(.appSubheadlineMedium)
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 12)
                             .background(Color.appSurface)
@@ -285,7 +329,7 @@ struct PhotoScanSection: View {
                         showingCamera = true
                     } label: {
                         Label("Camera", systemImage: "camera")
-                            .font(.appSubheadline.weight(.medium))
+                            .font(.appSubheadlineMedium)
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 12)
                             .background(Color.appPrimary)
@@ -309,9 +353,9 @@ struct WebScanSection: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Label("Scan Website", systemImage: "safari.fill")
-                .font(.appHeadline)
-                .foregroundColor(.appText)
+            Label("Paste a link", systemImage: "safari.fill")
+                .font(.appTitle3)
+                .foregroundColor(.appPrimary)
 
             HStack {
                 TextField("https://venue-website.com", text: $viewModel.websiteURL)
@@ -325,7 +369,7 @@ struct WebScanSection: View {
                     Task { await viewModel.scanWebsite() }
                 } label: {
                     Text("Scan")
-                        .font(.appCaption.weight(.bold))
+                        .font(.appCaptionBold)
                         .padding(.horizontal, 14)
                         .padding(.vertical, 8)
                         .background(Color.appPrimary)
@@ -354,7 +398,7 @@ struct WebScanSection: View {
                         .foregroundColor(.appSubtext)
                 } else {
                     Text("\(result.extractedDeals.count) deal\(result.extractedDeals.count == 1 ? "" : "s") found")
-                        .font(.appCaption.weight(.semibold))
+                        .font(.appCaptionSemiBold)
                         .foregroundColor(.appSuccess)
                 }
             }
@@ -368,14 +412,14 @@ struct DealFormSection: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
-            Label("Deal Details", systemImage: "tag.fill")
-                .font(.appHeadline)
-                .foregroundColor(.appText)
+            Label("The details", systemImage: "tag.fill")
+                .font(.appTitle3)
+                .foregroundColor(.appPrimary)
 
             // Title
             VStack(alignment: .leading, spacing: 6) {
-                Text("Deal Title *").font(.appSubheadline.weight(.medium))
-                TextField("e.g. $2 Draft Beers, Half-Price Appetizers", text: $viewModel.title)
+                Text("The deal *").font(.appSubheadlineMedium)
+                TextField("e.g. $2 drafts, half-off apps", text: $viewModel.title)
                     .textFieldStyle(.plain)
                     .padding(12)
                     .background(Color.appSurface)
@@ -385,10 +429,10 @@ struct DealFormSection: View {
 
             // Description
             VStack(alignment: .leading, spacing: 6) {
-                Text("Description *").font(.appSubheadline.weight(.medium))
+                Text("A bit more *").font(.appSubheadlineMedium)
                 ZStack(alignment: .topLeading) {
                     if viewModel.description.isEmpty {
-                        Text("Describe the deal in detail...")
+                        Text("Anything worth mentioning?")
                             .font(.appBody)
                             .foregroundColor(.appSubtext)
                             .padding(12)
@@ -405,15 +449,15 @@ struct DealFormSection: View {
 
             // Category
             VStack(alignment: .leading, spacing: 6) {
-                Text("Category *").font(.appSubheadline.weight(.medium))
+                Text("Category *").font(.appSubheadlineMedium)
                 HStack(spacing: 10) {
                     ForEach(DealCategory.allCases) { cat in
                         Button {
                             viewModel.selectedCategory = cat
                         } label: {
                             HStack(spacing: 6) {
-                                Text(cat.icon)
-                                Text(cat.displayName).font(.appCaption.weight(.medium))
+                                Image(systemName: cat.icon).font(.system(size: 14))
+                                Text(cat.displayName).font(.appCaption)
                             }
                             .padding(.horizontal, 14)
                             .padding(.vertical, 8)
@@ -427,7 +471,7 @@ struct DealFormSection: View {
 
             // Days
             VStack(alignment: .leading, spacing: 6) {
-                Text("Available Days *").font(.appSubheadline.weight(.medium))
+                Text("Days *").font(.appSubheadlineMedium)
                 LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 7), spacing: 8) {
                     ForEach(DayOfWeek.allCases) { day in
                         Button {
@@ -452,7 +496,7 @@ struct DealFormSection: View {
 
             // Time Range
             VStack(alignment: .leading, spacing: 6) {
-                Text("Time Range *").font(.appSubheadline.weight(.medium))
+                Text("Hours *").font(.appSubheadlineMedium)
                 HStack(spacing: 12) {
                     TimeWheelPicker(label: "Start", time: $viewModel.startTime)
                     Text("to").font(.appSubheadline).foregroundColor(.appSubtext)
@@ -481,7 +525,7 @@ struct SelectedVenueRow: View {
                 .clipShape(RoundedRectangle(cornerRadius: 8))
 
             VStack(alignment: .leading, spacing: 2) {
-                Text(venue.name).font(.appSubheadline.weight(.semibold))
+                Text(venue.name).font(.appSubheadlineSemiBold)
                 Text(venue.address).font(.appCaption).foregroundColor(.appSubtext).lineLimit(1)
             }
             Spacer()
@@ -497,34 +541,41 @@ struct SelectedVenueRow: View {
     }
 }
 
-struct ExtractedDealRow: View {
+struct CheckableDealRow: View {
     let deal: ExtractedDeal
-    let onApply: () -> Void
+    let index: Int
+    @ObservedObject var viewModel: AddDealViewModel
+
+    private var isChecked: Bool { viewModel.checkedDealIndices.contains(index) }
 
     var body: some View {
-        HStack(alignment: .top, spacing: 10) {
-            VStack(alignment: .leading, spacing: 3) {
-                Text(deal.title).font(.appCaption.weight(.semibold)).foregroundColor(.appText)
-                Text(deal.suggestedDays.map { $0.shortName }.joined(separator: ", ") +
-                     " · " + deal.suggestedStartTime.formattedTime + " – " + deal.suggestedEndTime.formattedTime)
-                    .font(.system(size: 10))
-                    .foregroundColor(.appSubtext)
+        Button {
+            if isChecked {
+                viewModel.checkedDealIndices.remove(index)
+            } else {
+                viewModel.checkedDealIndices.insert(index)
             }
-            Spacer()
-            Button("Use") {
-                onApply()
-                HapticFeedback.impact(.light)
+            HapticFeedback.impact(.light)
+        } label: {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: isChecked ? "checkmark.circle.fill" : "circle")
+                    .font(.system(size: 20))
+                    .foregroundColor(isChecked ? .appPrimary : .appSubtext)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(deal.title)
+                        .font(.appCaptionSemiBold)
+                        .foregroundColor(.appText)
+                    Text(deal.suggestedDays.map { $0.shortName }.joined(separator: ", ") +
+                         " · " + deal.suggestedStartTime.formattedTime + " – " + deal.suggestedEndTime.formattedTime)
+                        .font(.system(size: 10))
+                        .foregroundColor(.appSubtext)
+                }
+                Spacer()
             }
-            .font(.appCaption.weight(.bold))
-            .padding(.horizontal, 12)
-            .padding(.vertical, 5)
-            .background(Color.appPrimary)
-            .foregroundColor(.white)
+            .padding(10)
+            .background(isChecked ? Color.appPrimary.opacity(0.06) : Color.appSurface)
             .cornerRadius(8)
         }
-        .padding(10)
-        .background(Color.appSurface)
-        .cornerRadius(8)
     }
 }
 
@@ -560,7 +611,7 @@ struct VenueSearchSheet: View {
                                     .frame(width: 40, height: 40)
                                     .clipShape(RoundedRectangle(cornerRadius: 8))
                                 VStack(alignment: .leading, spacing: 2) {
-                                    Text(venue.name).font(.appSubheadline.weight(.medium)).foregroundColor(.appText)
+                                    Text(venue.name).font(.appSubheadlineMedium).foregroundColor(.appText)
                                     Text(venue.address).font(.appCaption).foregroundColor(.appSubtext).lineLimit(1)
                                 }
                             }
@@ -593,7 +644,7 @@ struct TimeWheelPicker: View {
             VStack(spacing: 2) {
                 Text(label).font(.system(size: 10)).foregroundColor(.appSubtext)
                 Text(time.formattedTime)
-                    .font(.appSubheadline.weight(.semibold))
+                    .font(.appSubheadlineSemiBold)
                     .foregroundColor(.appText)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 6)
@@ -684,5 +735,41 @@ struct ErrorBanner: View {
         .padding(12)
         .background(Color.appError.opacity(0.1))
         .cornerRadius(10)
+    }
+}
+
+// MARK: - Step Header
+
+struct StepHeader: View {
+    let number: Int
+    let title: String
+    let isComplete: Bool
+
+    var body: some View {
+        HStack(spacing: 10) {
+            ZStack {
+                Circle()
+                    .fill(isComplete ? Color.appSuccess : Color.appPrimary)
+                    .frame(width: 24, height: 24)
+                if isComplete {
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundColor(.white)
+                } else {
+                    Text("\(number)")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundColor(.white)
+                }
+            }
+            Text(title)
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundColor(isComplete ? .appSubtext : .appText)
+            Spacer()
+            if isComplete {
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.system(size: 13))
+                    .foregroundColor(.appSuccess)
+            }
+        }
     }
 }

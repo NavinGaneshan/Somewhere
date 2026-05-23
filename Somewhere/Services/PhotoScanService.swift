@@ -473,57 +473,76 @@ class PhotoScanService {
 
     // MARK: - Title Abbreviation (Rule 4)
 
-    /// Strips prices, discounts, times, and days from a raw line and returns a 2–4 word title.
+    /// Returns a 2–5 word title in the form "Item Name $price" or "Item Name Half Off".
+    /// Preserves the price or discount so users can see the deal at a glance.
     private func abbreviateTitle(_ raw: String) -> String {
         var s = raw
 
-        // Strip price and discount patterns
+        // 1. Capture price (first "$N" or "$N.NN") to append after item name.
+        var capturedPrice: String? = nil
+        if let range = s.range(of: #"\$\s*\d+(?:\.\d{1,2})?"#, options: .regularExpression) {
+            capturedPrice = String(s[range])
+                .replacingOccurrences(of: " ", with: "")
+        }
+
+        // 2. Capture discount phrase when there's no explicit dollar price.
+        var capturedDiscount: String? = nil
+        if capturedPrice == nil {
+            let discountMap: [(String, String?)] = [
+                (#"(?i)\d{1,3}\s*%\s*off"#,            nil),          // keep as-is e.g. "50% Off"
+                (#"(?i)half[-\s]?off"#,                 "Half Off"),
+                (#"(?i)half[-\s]?price"#,               "Half Price"),
+                (#"(?i)buy\s*one\s*get\s*one|bogo"#,   "BOGO"),
+                (#"(?i)two\s+for\s+one|2[-\s]?for[-\s]?1"#, "2 for 1"),
+            ]
+            for (pattern, replacement) in discountMap {
+                if let range = s.range(of: pattern, options: .regularExpression) {
+                    capturedDiscount = replacement ?? String(s[range])
+                    break
+                }
+            }
+        }
+
+        // 3. Strip price, discount, time, day, and filler from item-name portion.
         let stripPatterns: [String] = [
-            #"\$\s*\d+(?:\.\d{1,2})?\s*(?:off\b)?"#,          // $6, $2 off
-            #"\b\d{1,3}\s*%\s*off\b"#,                          // 20% off
-            #"\bhalf[-\s]?off\b"#,                               // half off
-            #"\bbogo\b"#,                                         // bogo
-            #"\bbuy\s+one[\s\w]*get\s+one\b"#,                  // buy one get one
-            #"\b2[-\s]for[-\s]1\b"#,                             // 2 for 1
-            #"\btwo\s+for\s+one\b"#,                             // two for one
-            #"\b\d+\s*(?:for|\/)\s*\$?\s*\d+"#,                 // 2 for $5
-            #"(?<!\d)\d{1,3}(?:\.\d{2})?\s*(?:ea|each)?\s*$"#, // trailing bare price
+            #"\$\s*\d+(?:\.\d{1,2})?\s*(?:off\b)?"#,
+            #"\b\d{1,3}\s*%\s*off\b"#,
+            #"\bhalf[-\s]?off\b"#,
+            #"\bhalf[-\s]?price\b"#,
+            #"\bbogo\b"#,
+            #"\bbuy\s+one[\s\w]*get\s+one\b"#,
+            #"\b2[-\s]for[-\s]1\b"#,
+            #"\btwo\s+for\s+one\b"#,
+            #"\b\d+\s*(?:for|\/)\s*\$?\s*\d+"#,
+            #"(?<!\d)\d{1,3}(?:\.\d{2})?\s*(?:ea|each)?\s*$"#,
+            #"\d{1,2}(?::\d{2})?\s*(?:am|pm)?\s*[-–to]+\s*\d{1,2}(?::\d{2})?\s*(?:am|pm)"#,
+            #"\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday|mon|tue|wed|thu|fri|sat|sun|weekdays?|weekends?|daily|every\s+day)\b"#,
+            #"^(enjoy|get|try|order|all|any|select|our|the|a|an)\s+"#,
         ]
         for pattern in stripPatterns {
             s = s.replacingOccurrences(of: pattern, with: " ",
                 options: [.regularExpression, .caseInsensitive])
         }
 
-        // Strip time ranges
-        s = s.replacingOccurrences(
-            of: #"\d{1,2}(?::\d{2})?\s*(?:am|pm)?\s*[-–to]+\s*\d{1,2}(?::\d{2})?\s*(?:am|pm)"#,
-            with: " ", options: [.regularExpression, .caseInsensitive])
-
-        // Strip day references
-        s = s.replacingOccurrences(
-            of: #"\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday|mon|tue|wed|thu|fri|sat|sun|weekdays?|weekends?|daily|every\s+day)\b"#,
-            with: " ", options: [.regularExpression, .caseInsensitive])
-
-        // Strip leading filler verbs and articles
-        s = s.replacingOccurrences(
-            of: #"^(enjoy|get|try|order|all|any|select|our|the|a|an)\s+"#,
-            with: "", options: [.regularExpression, .caseInsensitive])
-
-        // Collapse punctuation and extra whitespace
         s = s.replacingOccurrences(of: #"[,\-–|•·\+\(\)\[\]]"#, with: " ", options: .regularExpression)
         s = s.replacingOccurrences(of: #"\s{2,}"#, with: " ", options: .regularExpression)
-        s = s.trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
 
-        // Take first 4 words
+        // 4. Take first 2–3 words as item name (leave room for price/discount).
         let words = s.components(separatedBy: .whitespaces).filter { !$0.isEmpty }
         guard !words.isEmpty else { return raw.trimmingCharacters(in: .whitespaces) }
-        let capped = words.prefix(4).joined(separator: " ")
-
-        // Title case
-        return capped.split(separator: " ").map { w -> String in
-            let word = String(w)
-            return word.prefix(1).uppercased() + word.dropFirst().lowercased()
+        let hasOffer = capturedPrice != nil || capturedDiscount != nil
+        let itemName = words.prefix(hasOffer ? 3 : 4).map { w in
+            w.prefix(1).uppercased() + w.dropFirst().lowercased()
         }.joined(separator: " ")
+
+        // 5. Build final: "Item Name $6" or "Item Name Half Off".
+        if let price = capturedPrice {
+            return "\(itemName) \(price)"
+        } else if let discount = capturedDiscount {
+            return "\(itemName) \(discount)"
+        }
+        return itemName
     }
 
     // MARK: - Helpers

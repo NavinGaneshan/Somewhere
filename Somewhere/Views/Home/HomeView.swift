@@ -6,23 +6,36 @@ struct HomeView: View {
     @EnvironmentObject var locationService: LocationService
     @State private var showingFilter = false
     @State private var showingLocationPermission = false
+    @State private var horizonTime: Int? = nil
+    @State private var radiusDebounceTask: Task<Void, Never>? = nil
+    @State private var isRadiusDebouncing = false
+    @State private var showFiltersPanel = true
 
     var body: some View {
         ZStack {
             Color.appBackground.ignoresSafeArea()
 
             VStack(spacing: 0) {
-                // Search bar + filter button
-                searchHeader
+                // Brand header
+                brandHeader
 
-                // Active filter chips
-                if viewModel.filter.isFiltered {
-                    filterChipsRow
+                // Row 1: search + favorites toggle + filter icon
+                // Row 2: distance slider
+                searchFilterRows
+
+                // Results header — always visible when re-fetching with existing results
+                if !viewModel.isLoading || !viewModel.filteredVenuesWithDeals.isEmpty || isRadiusDebouncing {
+                    resultsHeader
                 }
 
-                // Results header
-                if !viewModel.isLoading {
-                    resultsHeader
+                // Collapsible filters + horizon panel
+                if showFiltersPanel {
+                    if viewModel.filter.isFiltered {
+                        filterChipsRow
+                    }
+                    if !viewModel.isLoading && !viewModel.filteredVenuesWithDeals.isEmpty {
+                        timeBarRow
+                    }
                 }
 
                 // Main content
@@ -35,8 +48,10 @@ struct HomeView: View {
                 }
             }
         }
-        .navigationTitle("Somewhere")
-        .navigationBarTitleDisplayMode(.large)
+        .navigationTitle("")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbarBackground(Color.appBackground, for: .navigationBar)
+        .toolbarColorScheme(.dark, for: .navigationBar)
         .toolbar { toolbarContent }
         .sheet(isPresented: $showingFilter) {
             FilterSheetView(filter: $viewModel.filter) { newFilter in
@@ -50,6 +65,7 @@ struct HomeView: View {
             Text("Enable location access in Settings to find deals near you.")
         }
         .onAppear {
+            viewModel.loadFavorites()
             if locationService.hasPermission {
                 Task { await viewModel.searchDeals() }
             } else {
@@ -63,64 +79,142 @@ struct HomeView: View {
                 showingLocationPermission = true
             }
         }
-        .refreshable {
-            await viewModel.searchDeals()
+        .onChange(of: horizonTime) { time in
+            viewModel.setScrubTime(time)
         }
     }
 
-    // MARK: - Search Header
+    // MARK: - Brand Header
 
-    private var searchHeader: some View {
-        HStack(spacing: 12) {
-            HStack(spacing: 8) {
-                Image(systemName: "magnifyingglass")
+    private var brandHeader: some View {
+        HStack(alignment: .bottom) {
+            VStack(alignment: .leading, spacing: 2) {
+                (Text("Some")
+                    .font(.custom("Fraunces-Light", size: 36))
+                    .foregroundColor(.appText)
+                + Text("w")
+                    .font(.custom("Fraunces-Italic", size: 36))
+                    .foregroundColor(.appPrimary)
+                + Text("here.")
+                    .font(.custom("Fraunces-Light", size: 36))
+                    .foregroundColor(.appText))
+                .tracking(-0.5)
+
+                Text("It's happy hour. Find deals right here, right now.")
+                    .font(.appCaption)
                     .foregroundColor(.appSubtext)
-                TextField("Search deals, venues...", text: $viewModel.filter.searchQuery)
-                    .onChange(of: viewModel.filter.searchQuery) { _ in
-                        viewModel.applyFilter()
-                    }
-                if !viewModel.filter.searchQuery.isEmpty {
-                    Button {
-                        viewModel.filter.searchQuery = ""
-                        viewModel.applyFilter()
-                    } label: {
-                        Image(systemName: "xmark.circle.fill")
-                            .foregroundColor(.appSubtext)
-                    }
-                }
             }
-            .padding(.horizontal, 12)
-            .frame(height: 44)
-            .background(Color.appSurface)
-            .cornerRadius(12)
-            .shadow(color: .black.opacity(0.04), radius: 2, y: 1)
-
-            Button {
-                showingFilter = true
-            } label: {
-                ZStack(alignment: .topTrailing) {
-                    Image(systemName: "slider.horizontal.3")
-                        .font(.system(size: 18))
-                        .foregroundColor(.appText)
-                        .frame(width: 44, height: 44)
-                        .background(Color.appSurface)
-                        .cornerRadius(12)
-                        .shadow(color: .black.opacity(0.04), radius: 2, y: 1)
-
-                    if viewModel.filter.activeFilterCount > 0 {
-                        Text("\(viewModel.filter.activeFilterCount)")
-                            .font(.system(size: 10, weight: .bold))
-                            .foregroundColor(.white)
-                            .frame(width: 16, height: 16)
-                            .background(Color.appAccent)
-                            .clipShape(Circle())
-                            .offset(x: 4, y: -4)
-                    }
-                }
-            }
+            Spacer()
         }
         .padding(.horizontal, 16)
-        .padding(.vertical, 10)
+        .padding(.top, 0)
+        .padding(.bottom, 4)
+    }
+
+    // MARK: - Search + Filter Rows
+
+    private var searchFilterRows: some View {
+        VStack(spacing: 6) {
+            // Row 1: search field + favorites toggle + filter icon
+            HStack(spacing: 8) {
+                HStack(spacing: 6) {
+                    Image(systemName: "magnifyingglass")
+                        .font(.system(size: 12))
+                        .foregroundColor(.appSubtext)
+                    TextField("Search…", text: $viewModel.filter.searchQuery)
+                        .font(.system(size: 13))
+                        .foregroundColor(.appText)
+                        .onChange(of: viewModel.filter.searchQuery) { _ in viewModel.applyFilter() }
+                    if !viewModel.filter.searchQuery.isEmpty {
+                        Button {
+                            viewModel.filter.searchQuery = ""
+                            viewModel.applyFilter()
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .font(.system(size: 12))
+                                .foregroundColor(.appSubtext)
+                        }
+                    }
+                }
+                .padding(.horizontal, 10)
+                .frame(height: 34)
+                .background(Color.appSurface)
+                .cornerRadius(10)
+                .shadow(color: .black.opacity(0.04), radius: 2, y: 1)
+
+                // Favorites toggle
+                Button {
+                    viewModel.filter.showOnlyFavorites.toggle()
+                    viewModel.applyFilter()
+                    HapticFeedback.impact(.light)
+                } label: {
+                    Image(systemName: viewModel.filter.showOnlyFavorites ? "heart.fill" : "heart")
+                        .font(.system(size: 16))
+                        .foregroundColor(viewModel.filter.showOnlyFavorites ? .red : .appSubtext)
+                        .frame(width: 34, height: 34)
+                        .background(Color.appSurface)
+                        .cornerRadius(10)
+                        .shadow(color: .black.opacity(0.04), radius: 2, y: 1)
+                }
+
+                // Filter button
+                Button { showingFilter = true } label: {
+                    ZStack(alignment: .topTrailing) {
+                        Image(systemName: "slider.horizontal.3")
+                            .font(.system(size: 15))
+                            .foregroundColor(.appText)
+                            .frame(width: 34, height: 34)
+                            .background(Color.appSurface)
+                            .cornerRadius(10)
+                            .shadow(color: .black.opacity(0.04), radius: 2, y: 1)
+                        if viewModel.filter.activeFilterCount > 0 {
+                            Text("\(viewModel.filter.activeFilterCount)")
+                                .font(.system(size: 9, weight: .bold))
+                                .foregroundColor(.white)
+                                .frame(width: 14, height: 14)
+                                .background(Color.appAccent)
+                                .clipShape(Circle())
+                                .offset(x: 3, y: -3)
+                        }
+                    }
+                }
+            }
+            .padding(.horizontal, 16)
+
+            // Row 2: distance slider full width
+            HStack(spacing: 8) {
+                Image(systemName: "location.fill")
+                    .font(.system(size: 11))
+                    .foregroundColor(.appPrimary)
+                Slider(
+                    value: $viewModel.filter.searchRadius,
+                    in: AppConstants.minSearchRadiusMiles...AppConstants.maxSearchRadiusMiles,
+                    step: 0.25,
+                    onEditingChanged: { editing in
+                        if editing {
+                            radiusDebounceTask?.cancel()
+                            isRadiusDebouncing = false
+                        } else {
+                            isRadiusDebouncing = true
+                            radiusDebounceTask?.cancel()
+                            radiusDebounceTask = Task {
+                                try? await Task.sleep(nanoseconds: 600_000_000)
+                                guard !Task.isCancelled else { return }
+                                isRadiusDebouncing = false
+                                await viewModel.searchDeals()
+                            }
+                        }
+                    }
+                )
+                .tint(.appPrimary)
+                Text("\(String(format: "%.1f", viewModel.filter.searchRadius))mi")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundColor(.appText)
+                    .frame(width: 34, alignment: .trailing)
+            }
+            .padding(.horizontal, 16)
+        }
+        .padding(.vertical, 8)
     }
 
     // MARK: - Filter Chips
@@ -133,7 +227,7 @@ struct HomeView: View {
                     viewModel.resetFilter()
                 } label: {
                     Label("Clear", systemImage: "xmark")
-                        .font(.appCaption.weight(.semibold))
+                        .font(.appCaptionSemiBold)
                         .foregroundColor(.appError)
                         .padding(.horizontal, 10)
                         .padding(.vertical, 5)
@@ -148,23 +242,18 @@ struct HomeView: View {
                     }
                 }
 
-                ForEach(Array(viewModel.filter.categories), id: \.self) { cat in
-                    FilterChip(label: cat.displayName, icon: nil, color: cat.uiColor) {
-                        viewModel.filter.categories.remove(cat)
-                        viewModel.applyFilter()
+                if viewModel.filter.categories != SearchFilter.defaultCategories {
+                    ForEach(Array(viewModel.filter.categories).sorted { $0.rawValue < $1.rawValue }, id: \.self) { cat in
+                        FilterChip(label: cat.displayName, icon: nil, color: cat.uiColor) {
+                            viewModel.filter.categories.remove(cat)
+                            viewModel.applyFilter()
+                        }
                     }
                 }
 
                 if viewModel.filter.timeFilter != .anytime {
                     FilterChip(label: viewModel.filter.timeFilter.displayName, icon: "clock", color: .appPrimary) {
                         viewModel.filter.timeFilter = .anytime
-                        viewModel.applyFilter()
-                    }
-                }
-
-                if viewModel.filter.searchRadius != 1.0 {
-                    FilterChip(label: "\(String(format: "%.1f", viewModel.filter.searchRadius)) mi", icon: "location", color: .appAccent) {
-                        viewModel.filter.searchRadius = 1.0
                         viewModel.applyFilter()
                     }
                 }
@@ -186,17 +275,43 @@ struct HomeView: View {
 
     private var resultsHeader: some View {
         HStack {
-            if viewModel.isSearchingNewVenues {
+            if isRadiusDebouncing || (viewModel.isLoading && !viewModel.filteredVenuesWithDeals.isEmpty) {
                 HStack(spacing: 6) {
                     ProgressView().scaleEffect(0.7)
-                    Text("Scanning for new venues...")
+                    Text("Updating radius…")
+                        .font(.appCaption)
+                        .foregroundColor(.appSubtext)
+                }
+            } else if viewModel.isSearchingNewVenues {
+                HStack(spacing: 6) {
+                    ProgressView().scaleEffect(0.7)
+                    Text("Looking around…")
                         .font(.appCaption)
                         .foregroundColor(.appSubtext)
                 }
             } else {
-                Text("\(viewModel.totalVenuesCount) venue\(viewModel.totalVenuesCount == 1 ? "" : "s") · \(viewModel.totalDealsCount) deal\(viewModel.totalDealsCount == 1 ? "" : "s")")
-                    .font(.appCaption)
-                    .foregroundColor(.appSubtext)
+                HStack(spacing: 6) {
+                    Text("\(viewModel.totalVenuesCount) venue\(viewModel.totalVenuesCount == 1 ? "" : "s") · \(viewModel.totalDealsCount) deal\(viewModel.totalDealsCount == 1 ? "" : "s")")
+                        .font(.appCaption)
+                        .foregroundColor(.appSubtext)
+
+                    if !viewModel.filteredVenuesWithDeals.isEmpty {
+                        Button {
+                            withAnimation(AppConstants.springAnimation) {
+                                if viewModel.allExpanded {
+                                    viewModel.collapseAll()
+                                } else {
+                                    viewModel.expandAll()
+                                }
+                            }
+                            HapticFeedback.impact(.light)
+                        } label: {
+                            Image(systemName: viewModel.allExpanded ? "chevron.up.circle" : "chevron.down.circle")
+                                .font(.system(size: 13))
+                                .foregroundColor(.appSubtext)
+                        }
+                    }
+                }
             }
 
             Spacer()
@@ -204,35 +319,43 @@ struct HomeView: View {
             if viewModel.activeDealsCount > 0 {
                 HStack(spacing: 4) {
                     Circle().fill(Color.activeGreen).frame(width: 7, height: 7)
-                    Text("\(viewModel.activeDealsCount) active now")
-                        .font(.appCaption.weight(.semibold))
+                    Text("\(viewModel.activeDealsCount) on now")
+                        .font(.appCaptionSemiBold)
                         .foregroundColor(.activeGreen)
                 }
             }
 
-            if !viewModel.filteredVenuesWithDeals.isEmpty {
-                Button {
-                    withAnimation(AppConstants.springAnimation) {
-                        if viewModel.allExpanded {
-                            viewModel.collapseAll()
-                        } else {
-                            viewModel.expandAll()
-                        }
-                    }
-                    HapticFeedback.impact(.light)
-                } label: {
-                    HStack(spacing: 4) {
-                        Image(systemName: viewModel.allExpanded ? "chevron.up.square" : "chevron.down.square")
-                            .font(.system(size: 12, weight: .semibold))
-                        Text(viewModel.allExpanded ? "Collapse all" : "Expand all")
-                            .font(.appCaption.weight(.semibold))
-                    }
-                    .foregroundColor(.appPrimary)
-                }
+            Button {
+                withAnimation(AppConstants.springAnimation) { showFiltersPanel.toggle() }
+                HapticFeedback.impact(.light)
+            } label: {
+                Image(systemName: showFiltersPanel ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle")
+                    .font(.system(size: 16))
+                    .foregroundColor(showFiltersPanel ? .appPrimary : .appSubtext)
             }
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 6)
+    }
+
+    // MARK: - Time Bar
+
+    private var timeBarRow: some View {
+        HStack(spacing: 10) {
+            TimeBar(selectedTime: $horizonTime)
+            if horizonTime != nil {
+                Button {
+                    horizonTime = nil
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 16))
+                        .foregroundColor(.appSubtext)
+                }
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, 2)
+        .padding(.bottom, 4)
     }
 
     // MARK: - Deals List
@@ -248,12 +371,19 @@ struct HomeView: View {
                         onToggleExpand: { viewModel.toggleVenueExpansion(vwd.id) },
                         onVote: { dealId, upvote in
                             Task { await viewModel.vote(dealId: dealId, upvote: upvote) }
+                        },
+                        isFavorite: viewModel.favoriteVenueIds.contains(vwd.venue.id),
+                        onToggleFavorite: {
+                            Task { await viewModel.toggleFavorite(venueId: vwd.venue.id) }
                         }
                     )
                 }
                 .padding(.horizontal, 16)
             }
             .padding(.vertical, 8)
+        }
+        .refreshable {
+            await viewModel.searchDeals()
         }
     }
 
@@ -274,26 +404,23 @@ struct HomeView: View {
     // MARK: - Empty State
 
     private var emptyStateView: some View {
-        VStack(spacing: 20) {
+        VStack(spacing: 16) {
             Spacer()
-            Image(systemName: "wineglass")
-                .font(.system(size: 64))
-                .foregroundColor(.appSubtext.opacity(0.4))
-
-            Text(viewModel.filter.isFiltered ? "No deals match your filters" : "No deals found nearby")
-                .font(.appTitle3)
+            Text(viewModel.filter.isFiltered ? "Nothing matches." : "Nothing nearby yet.")
+                .font(.custom("Fraunces-Italic", size: 28))
                 .foregroundColor(.appText)
+                .multilineTextAlignment(.center)
 
             Text(viewModel.filter.isFiltered
-                 ? "Try adjusting your filters to see more deals."
-                 : "Be the first to add a happy hour deal in your area!")
+                 ? "Try loosening your filters."
+                 : "Be the first to share one.")
                 .font(.appSubheadline)
                 .foregroundColor(.appSubtext)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 40)
 
             if viewModel.filter.isFiltered {
-                Button("Clear Filters") { viewModel.resetFilter() }
+                Button("Reset") { viewModel.resetFilter() }
                     .buttonStyle(.borderedProminent)
                     .tint(.appPrimary)
             }
@@ -307,14 +434,12 @@ struct HomeView: View {
     @ToolbarContentBuilder
     private var toolbarContent: some ToolbarContent {
         ToolbarItem(placement: .navigationBarTrailing) {
-            if let location = viewModel.lastSearchLocation {
-                HStack(spacing: 4) {
-                    Image(systemName: "location.fill")
-                        .font(.system(size: 11))
-                        .foregroundColor(.appPrimary)
-                    Text("Near You")
-                        .font(.appCaption.weight(.medium))
-                        .foregroundColor(.appPrimary)
+            if viewModel.lastSearchLocation != nil {
+                HStack(spacing: 3) {
+                    Circle().fill(Color.activeGreen).frame(width: 5, height: 5)
+                    Text("Nearby")
+                        .font(.system(size: 11, weight: .medium, design: .monospaced))
+                        .foregroundColor(.appSubtext)
                 }
             }
         }
@@ -333,7 +458,7 @@ struct FilterChip: View {
             if let icon = icon {
                 Image(systemName: icon).font(.system(size: 10))
             }
-            Text(label).font(.appCaption.weight(.medium))
+            Text(label).font(.appCaption)
             Button { onRemove() } label: {
                 Image(systemName: "xmark").font(.system(size: 9, weight: .bold))
             }

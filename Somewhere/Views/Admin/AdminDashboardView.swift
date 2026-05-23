@@ -21,8 +21,8 @@ struct AdminDashboardView: View {
             .padding(16)
         }
         .background(Color.appBackground.ignoresSafeArea())
-        .navigationTitle("Admin Dashboard")
-        .navigationBarTitleDisplayMode(.large)
+        .navigationTitle("Admin")
+        .navigationBarTitleDisplayMode(.inline)
         .overlay {
             if viewModel.isLoading {
                 ProgressView("Loading...").padding(20).background(.ultraThinMaterial).cornerRadius(12)
@@ -85,11 +85,11 @@ struct AdminDashboardView: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
                 Label("API Usage Today", systemImage: "network")
-                    .font(.appSubheadline.weight(.semibold))
+                    .font(.appSubheadlineSemiBold)
                     .foregroundColor(.appText)
                 Spacer()
                 Text("\(viewModel.pvaStats.apiCallsToday) / \(viewModel.pvaStats.apiCallsLimit)")
-                    .font(.appCaption.weight(.bold))
+                    .font(.appCaptionBold)
                     .foregroundColor(viewModel.pvaStats.apiUsagePercent > 80 ? .appError : .appText)
             }
 
@@ -126,7 +126,7 @@ struct AdminDashboardView: View {
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text("\(viewModel.pendingDeals.count) deal\(viewModel.pendingDeals.count == 1 ? "" : "s") awaiting review")
-                        .font(.appSubheadline.weight(.semibold))
+                        .font(.appSubheadlineSemiBold)
                         .foregroundColor(.appText)
                     Text("Tap to review and approve")
                         .font(.appCaption)
@@ -205,7 +205,7 @@ struct AdminStatCard: View {
                 .foregroundColor(.appText)
 
             Text(title)
-                .font(.appCaption.weight(.medium))
+                .font(.appCaption)
                 .foregroundColor(.appSubtext)
 
             Text(trend)
@@ -238,7 +238,7 @@ struct AdminNavRow<Destination: View>: View {
                     .background(color.opacity(0.12))
                     .cornerRadius(8)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(title).font(.appSubheadline.weight(.medium)).foregroundColor(.appText)
+                    Text(title).font(.appSubheadlineMedium).foregroundColor(.appText)
                     Text(subtitle).font(.appCaption).foregroundColor(.appSubtext)
                 }
                 Spacer()

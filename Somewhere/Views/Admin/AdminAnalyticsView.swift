@@ -127,7 +127,7 @@ struct AdminAnalyticsView: View {
                         .foregroundColor(.appText)
                     Spacer()
                     Text(String(format: "%.0f%%", viewModel.pvaStats.apiUsagePercent))
-                        .font(.appSubheadline.weight(.bold))
+                        .font(.appSubheadlineBold)
                         .foregroundColor(viewModel.pvaStats.apiUsagePercent > 80 ? .appError : .appText)
                 }
                 ProgressView(value: viewModel.pvaStats.apiUsagePercent / 100)
@@ -184,13 +184,14 @@ struct CategoryBar: View {
     var body: some View {
         VStack(spacing: 4) {
             HStack {
-                Text(category.icon)
+                Image(systemName: category.icon)
+                    .foregroundColor(category.uiColor)
                 Text(category.displayName)
                     .font(.appSubheadline)
                     .foregroundColor(.appText)
                 Spacer()
                 Text("\(count)")
-                    .font(.appSubheadline.weight(.bold))
+                    .font(.appSubheadlineBold)
                     .foregroundColor(category.uiColor)
                 Text(String(format: "(%.0f%%)", percentage * 100))
                     .font(.appCaption)
@@ -227,7 +228,7 @@ struct PVAMetricRow: View {
                     .foregroundColor(.appText)
                 Spacer()
                 Text("\(value) / \(total)")
-                    .font(.appCaption.weight(.semibold))
+                    .font(.appCaptionSemiBold)
                     .foregroundColor(color)
             }
             ProgressView(value: percent).tint(color)

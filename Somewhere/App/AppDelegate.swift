@@ -29,6 +29,19 @@ class AppDelegate: NSObject, UIApplicationDelegate {
             // Firebase Auth listener handles the rest
         }
 
+        // Apply Fraunces + Inter Tight to navigation bar titles via UINavigationBarAppearance
+        let inkColor = UIColor(red: 0.098, green: 0.086, blue: 0.075, alpha: 1)
+        let largeTitleFont = UIFont(name: "Fraunces-Light", size: 34) ?? UIFont.systemFont(ofSize: 34, weight: .light)
+        let inlineTitleFont = UIFont(name: "InterTight-SemiBold", size: 17) ?? UIFont.systemFont(ofSize: 17, weight: .semibold)
+
+        let appearance = UINavigationBarAppearance()
+        appearance.configureWithTransparentBackground()
+        appearance.largeTitleTextAttributes = [.font: largeTitleFont, .foregroundColor: inkColor]
+        appearance.titleTextAttributes = [.font: inlineTitleFont, .foregroundColor: inkColor]
+
+        UINavigationBar.appearance().standardAppearance = appearance
+        UINavigationBar.appearance().scrollEdgeAppearance = appearance
+
         return true
     }
 

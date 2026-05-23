@@ -8,6 +8,8 @@ struct VenueCardView: View {
     let isExpanded: Bool
     let onToggleExpand: () -> Void
     let onVote: (String, Bool) -> Void
+    var isFavorite: Bool = false
+    var onToggleFavorite: () -> Void = {}
 
     private var venue: Venue { venueWithDeals.venue }
 
@@ -24,9 +26,7 @@ struct VenueCardView: View {
             venueHeader
 
             if isExpanded && !sortedDeals.isEmpty {
-                Divider().padding(.horizontal, 16)
                 dealsSection
-                Divider().padding(.horizontal, 16)
                 navigationButtons
             }
         }
@@ -38,41 +38,40 @@ struct VenueCardView: View {
     // MARK: - Venue Header
 
     private var venueHeader: some View {
-        HStack(spacing: 12) {
-            // Photo thumbnail
-            VenuePhotoView(photoReference: venue.photoReference, maxWidth: 64)
-                .frame(width: 64, height: 64)
-                .clipShape(RoundedRectangle(cornerRadius: 10))
+        HStack(spacing: 10) {
+            // Photo thumbnail — tapping also toggles expansion
+            VenuePhotoView(photoReference: venue.photoReference, maxWidth: 56)
+                .frame(width: 56, height: 56)
+                .clipShape(RoundedRectangle(cornerRadius: 8))
 
             // Info
-            VStack(alignment: .leading, spacing: 4) {
-                HStack {
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(alignment: .center, spacing: 6) {
                     Text(venue.name)
-                        .font(.appHeadline)
+                        .font(.system(size: 14, weight: .semibold))
                         .foregroundColor(.appText)
                         .lineLimit(1)
-                    Spacer()
+                    Spacer(minLength: 0)
                     if venueWithDeals.hasActiveDeals {
                         activeNowBadge
                     }
                 }
 
-                HStack(spacing: 6) {
-                    Text(venue.category.icon)
+                HStack(spacing: 4) {
                     Text(venue.category.displayName)
                         .font(.appCaption)
                         .foregroundColor(.appSubtext)
                     if !venue.priceLevelString.isEmpty {
-                        Text("·").foregroundColor(.appSubtext)
+                        Text("·").foregroundColor(.appSubtext.opacity(0.5))
                         Text(venue.priceLevelString)
                             .font(.appCaption)
                             .foregroundColor(.appSubtext)
                     }
                     if let rating = venue.rating {
-                        Text("·").foregroundColor(.appSubtext)
+                        Text("·").foregroundColor(.appSubtext.opacity(0.5))
                         HStack(spacing: 2) {
                             Image(systemName: "star.fill")
-                                .font(.system(size: 10))
+                                .font(.system(size: 9))
                                 .foregroundColor(.appAccent)
                             Text(String(format: "%.1f", rating))
                                 .font(.appCaption)
@@ -83,39 +82,49 @@ struct VenueCardView: View {
 
                 HStack(spacing: 4) {
                     Image(systemName: "location.fill")
-                        .font(.system(size: 10))
+                        .font(.system(size: 9))
                         .foregroundColor(.appPrimary)
                     if let userLocation = userLocation {
                         Text(venue.formattedDistance(from: userLocation))
                     }
-                    Text("·")
+                    Text("·").foregroundColor(.appSubtext.opacity(0.5))
                     Text(venue.address)
                         .lineLimit(1)
                 }
                 .font(.appCaption)
                 .foregroundColor(.appSubtext)
+
+                // Deal count
+                if !sortedDeals.isEmpty {
+                    Text("\(sortedDeals.count) deal\(sortedDeals.count == 1 ? "" : "s")")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundColor(.appPrimary)
+                }
             }
 
-            // Chevron — always shown so the card can toggle even for a single deal.
-            Button {
-                withAnimation(AppConstants.springAnimation) {
-                    onToggleExpand()
+            // Favorite + Directions buttons
+            VStack(spacing: 6) {
+                Button { onToggleFavorite() } label: {
+                    Image(systemName: isFavorite ? "heart.fill" : "heart")
+                        .font(.system(size: 18))
+                        .foregroundColor(isFavorite ? .red : .appSubtext)
                 }
-                HapticFeedback.impact(.light)
-            } label: {
-                VStack(spacing: 2) {
-                    Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
-                        .font(.system(size: 13, weight: .semibold))
-                    if !sortedDeals.isEmpty {
-                        Text("\(sortedDeals.count)")
-                            .font(.system(size: 10, weight: .semibold))
-                    }
+                .buttonStyle(.borderless)
+
+                Button { openNavigation() } label: {
+                    Image(systemName: "location.circle.fill")
+                        .font(.system(size: 20))
+                        .foregroundColor(.appPrimary)
                 }
-                .foregroundColor(.appSubtext)
-                .padding(8)
+                .buttonStyle(.borderless)
             }
         }
-        .padding(16)
+        .padding(12)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            withAnimation(AppConstants.springAnimation) { onToggleExpand() }
+            HapticFeedback.impact(.light)
+        }
     }
 
     private var activeNowBadge: some View {
@@ -136,27 +145,17 @@ struct VenueCardView: View {
     // MARK: - Deals Section
 
     private var dealsSection: some View {
-        VStack(spacing: 0) {
+        VStack(spacing: 6) {
             ForEach(sortedDeals) { deal in
                 DealRowView(deal: deal, onVote: onVote)
-                if deal.id != sortedDeals.last?.id {
-                    Divider().padding(.horizontal, 16)
-                }
             }
         }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
     }
 
     private var navigationButtons: some View {
         HStack(spacing: 12) {
-            // Navigate button
-            NavigationButton(
-                title: "Directions",
-                icon: "arrow.triangle.turn.up.right.circle.fill",
-                color: .appPrimary
-            ) {
-                openNavigation()
-            }
-
             // Website button
             if let website = venue.website, let url = URL(string: website) {
                 NavigationButton(
@@ -213,7 +212,7 @@ struct NavigationButton: View {
         Button(action: action) {
             HStack(spacing: 6) {
                 Image(systemName: icon).font(.system(size: 13))
-                Text(title).font(.appCaption.weight(.semibold))
+                Text(title).font(.appCaptionSemiBold)
             }
             .foregroundColor(color)
             .padding(.horizontal, 12)

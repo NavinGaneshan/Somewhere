@@ -267,14 +267,15 @@ struct UserDealRow: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            Text(deal.category.icon)
-                .font(.system(size: 20))
+            Image(systemName: deal.category.icon)
+                .font(.system(size: 16))
+                .foregroundColor(deal.category.uiColor)
                 .frame(width: 36, height: 36)
                 .background(deal.category.uiColor.opacity(0.12))
                 .cornerRadius(8)
 
             VStack(alignment: .leading, spacing: 2) {
-                Text(deal.venueName).font(.appCaption.weight(.semibold)).foregroundColor(.appText)
+                Text(deal.venueName).font(.appCaptionSemiBold).foregroundColor(.appText)
                 Text(deal.title).font(.appCaption).foregroundColor(.appSubtext).lineLimit(1)
             }
 

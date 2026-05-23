@@ -6,151 +6,154 @@ struct DealRowView: View {
     @State private var hasVoted = false
     @State private var showingSource = false
 
+    private var hasSource: Bool { deal.sourceURL != nil || deal.imageURL != nil }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .top, spacing: 10) {
-                // Category badge
-                categoryBadge
+        HStack(alignment: .top, spacing: 10) {
+            // Category icon in colored box
+            ZStack {
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(deal.category.uiColor.opacity(0.18))
+                    .frame(width: 36, height: 36)
+                Image(systemName: deal.category.icon)
+                    .font(.system(size: 16))
+                    .foregroundColor(deal.category.uiColor)
+            }
+            .padding(.top, 2)
 
-                VStack(alignment: .leading, spacing: 4) {
-                    // Title
-                    HStack {
-                        Text(deal.title)
-                            .font(.appSubheadline.weight(.semibold))
-                            .foregroundColor(.appText)
-                            .fixedSize(horizontal: false, vertical: true)
+            VStack(alignment: .leading, spacing: 6) {
+                // Title row
+                HStack(alignment: .top, spacing: 4) {
+                    Text(deal.title)
+                        .font(.appQuote)
+                        .foregroundColor(.appPrimary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: 0)
+                    if deal.isActiveNow {
+                        HStack(spacing: 3) {
+                            Circle().fill(Color.activeGreen).frame(width: 5, height: 5)
+                            Text("Now").font(.system(size: 10, weight: .bold)).foregroundColor(.activeGreen)
+                        }
+                        .padding(.top, 2)
+                    }
+                }
 
-                        Spacer()
+                // Description
+                Text(deal.description)
+                    .font(.appCaption)
+                    .foregroundColor(.appSubtext)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
 
-                        // Active indicator
-                        if deal.isActiveNow {
-                            HStack(spacing: 3) {
-                                Circle().fill(Color.activeGreen).frame(width: 5, height: 5)
-                                Text("Active").font(.system(size: 10, weight: .bold)).foregroundColor(.activeGreen)
-                            }
+                // Footer tags
+                HStack(spacing: 6) {
+                    tagPill(deal.formattedTimeRange, icon: "clock")
+                    tagPill(deal.formattedDays, icon: "calendar")
+                    Spacer(minLength: 0)
+                    sourceIcon
+                }
+
+                // Votes + More row
+                HStack(spacing: 10) {
+                    Button {
+                        guard !hasVoted else { return }
+                        hasVoted = true
+                        onVote(deal.id, true)
+                        HapticFeedback.impact(.light)
+                    } label: {
+                        HStack(spacing: 3) {
+                            Image(systemName: hasVoted ? "hand.thumbsup.fill" : "hand.thumbsup")
+                                .font(.system(size: 12))
+                            Text("\(deal.upvotes)")
+                                .font(.appCaption)
+                        }
+                        .foregroundColor(hasVoted ? .appPrimary : .appSubtext)
+                    }
+
+                    Button {
+                        guard !hasVoted else { return }
+                        hasVoted = true
+                        onVote(deal.id, false)
+                        HapticFeedback.impact(.light)
+                    } label: {
+                        Image(systemName: "hand.thumbsdown")
+                            .font(.system(size: 12))
+                            .foregroundColor(.appSubtext)
+                    }
+
+                    Spacer()
+
+                    if deal.isVerified && deal.source != .manual && deal.source != .photo {
+                        HStack(spacing: 3) {
+                            Image(systemName: "checkmark.seal.fill")
+                                .font(.system(size: 10))
+                                .foregroundColor(.appSuccess)
+                            Text("Confirmed")
+                                .font(.appCaption2)
+                                .foregroundColor(.appSuccess)
                         }
                     }
 
-                    // Description
-                    Text(deal.description)
-                        .font(.appCaption)
-                        .foregroundColor(.appSubtext)
-                        .lineLimit(3)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
-
-            // Time/days row
-            HStack(spacing: 10) {
-                Label(deal.formattedTimeRange, systemImage: "clock")
-                    .font(.appCaption.weight(.medium))
-                    .foregroundColor(.appText)
-
-                Text("·").foregroundColor(.appDivider)
-
-                Text(deal.formattedDays)
-                    .font(.appCaption.weight(.medium))
-                    .foregroundColor(.appText)
-
-                Spacer()
-
-                sourceLabel
-            }
-
-            // Votes + More row
-            HStack(spacing: 12) {
-                // Upvote
-                Button {
-                    guard !hasVoted else { return }
-                    hasVoted = true
-                    onVote(deal.id, true)
-                    HapticFeedback.impact(.light)
-                } label: {
-                    HStack(spacing: 4) {
-                        Image(systemName: hasVoted ? "hand.thumbsup.fill" : "hand.thumbsup")
-                            .font(.system(size: 13))
-                        Text("\(deal.upvotes)")
-                            .font(.appCaption)
-                    }
-                    .foregroundColor(hasVoted ? .appPrimary : .appSubtext)
-                }
-
-                // Downvote
-                Button {
-                    guard !hasVoted else { return }
-                    hasVoted = true
-                    onVote(deal.id, false)
-                    HapticFeedback.impact(.light)
-                } label: {
-                    Image(systemName: "hand.thumbsdown")
-                        .font(.system(size: 13))
-                        .foregroundColor(.appSubtext)
-                }
-
-                Spacer()
-
-                if deal.isVerified {
-                    HStack(spacing: 3) {
-                        Image(systemName: "checkmark.seal.fill")
-                            .font(.system(size: 11))
-                            .foregroundColor(.appSuccess)
-                        Text("Verified")
-                            .font(.appCaption2)
-                            .foregroundColor(.appSuccess)
-                    }
-                }
-
-                // "More" button — only shown when there's a source to display
-                if deal.sourceURL != nil {
-                    Button {
-                        showingSource = true
-                        HapticFeedback.impact(.light)
-                    } label: {
-                        Text("More")
-                            .font(.appCaption2.weight(.semibold))
-                            .foregroundColor(.appPrimary)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 3)
-                            .background(Color.appPrimary.opacity(0.1))
-                            .cornerRadius(6)
+                    if hasSource {
+                        Button {
+                            showingSource = true
+                            HapticFeedback.impact(.light)
+                        } label: {
+                            Text("More")
+                                .font(.appCaption2SemiBold)
+                                .foregroundColor(.appPrimary)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 3)
+                                .background(Color.appPrimary.opacity(0.1))
+                                .cornerRadius(6)
+                        }
                     }
                 }
             }
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 12)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 10)
+        .background(Color.appBackground.opacity(0.6))
+        .cornerRadius(8)
         .sheet(isPresented: $showingSource) {
-            if let urlString = deal.sourceURL {
+            let urlString = deal.sourceURL ?? deal.imageURL
+            if let urlString {
                 DealSourceSheet(deal: deal, sourceURLString: urlString)
             }
         }
     }
 
-    private var categoryBadge: some View {
-        Text(deal.category.icon)
-            .font(.system(size: 20))
-            .frame(width: 36, height: 36)
-            .background(deal.category.uiColor.opacity(0.12))
-            .cornerRadius(8)
+    private func tagPill(_ text: String, icon: String? = nil) -> some View {
+        HStack(spacing: 3) {
+            if let icon = icon {
+                Image(systemName: icon).font(.system(size: 9))
+            }
+            Text(text).font(.appCaption2)
+        }
+        .foregroundColor(.appSubtext)
+        .padding(.horizontal, 6)
+        .padding(.vertical, 3)
+        .background(Color.appDivider.opacity(0.5))
+        .cornerRadius(4)
     }
 
-    private var sourceLabel: some View {
+    private var sourceIcon: some View {
         Group {
             switch deal.source {
             case .photo:
-                Label("Photo", systemImage: "camera.fill")
+                Image(systemName: "camera.fill")
             case .website:
-                Label("Web", systemImage: "safari")
+                Image(systemName: "safari")
             case .userContributed:
-                Label("User", systemImage: "person.fill")
+                Image(systemName: "person.fill")
             case .automated:
-                Label("Auto", systemImage: "cpu")
+                Image(systemName: "cpu")
             case .manual:
                 EmptyView()
             }
         }
-        .font(.system(size: 10))
-        .foregroundColor(.appSubtext.opacity(0.7))
+        .font(.system(size: 9))
+        .foregroundColor(.appSubtext.opacity(0.6))
     }
 }
 
@@ -169,7 +172,12 @@ struct DealSourceSheet: View {
         return lower.hasSuffix(".jpg") || lower.hasSuffix(".jpeg") ||
                lower.hasSuffix(".png") || lower.hasSuffix(".webp") ||
                lower.hasSuffix(".gif") || lower.contains("place/photo") ||
-               lower.contains("googleusercontent")
+               lower.contains("googleusercontent") ||
+               lower.contains("firebasestorage.googleapis.com")
+    }
+
+    private var isLocalStorageImage: Bool {
+        sourceURLString.lowercased().contains("firebasestorage.googleapis.com")
     }
 
     private var displayDomain: String {
@@ -183,7 +191,7 @@ struct DealSourceSheet: View {
                     // Deal header recap
                     VStack(alignment: .leading, spacing: 6) {
                         HStack(spacing: 8) {
-                            Text(deal.category.icon).font(.system(size: 22))
+                            Image(systemName: deal.category.icon).font(.system(size: 20)).foregroundColor(deal.category.uiColor)
                             Text(deal.title)
                                 .font(.appHeadline)
                                 .foregroundColor(.appText)
@@ -238,18 +246,19 @@ struct DealSourceSheet: View {
                 }
             }
 
-            openInBrowserButton
+            if !isLocalStorageImage {
+                openInBrowserButton
+            }
         }
     }
 
     private var webSourceView: some View {
         VStack(spacing: 12) {
-            // Domain pill
             HStack(spacing: 8) {
                 Image(systemName: "safari.fill")
                     .foregroundColor(.appPrimary)
                 Text(displayDomain)
-                    .font(.appSubheadline.weight(.medium))
+                    .font(.appSubheadlineMedium)
                     .foregroundColor(.appText)
                     .lineLimit(1)
                 Spacer()
@@ -258,7 +267,6 @@ struct DealSourceSheet: View {
             .background(Color.appSurface)
             .cornerRadius(AppConstants.cardCornerRadius)
 
-            // Full URL (truncated, selectable)
             Text(sourceURLString)
                 .font(.system(size: 11, design: .monospaced))
                 .foregroundColor(.appSubtext)
@@ -278,8 +286,8 @@ struct DealSourceSheet: View {
         } label: {
             HStack(spacing: 8) {
                 Image(systemName: "safari")
-                Text("Open in Browser")
-                    .font(.appSubheadline.weight(.semibold))
+                Text("Open")
+                    .font(.appSubheadlineSemiBold)
             }
             .foregroundColor(.white)
             .frame(maxWidth: .infinity)

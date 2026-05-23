@@ -29,6 +29,7 @@ class AddDealViewModel: ObservableObject {
     @Published var showingImagePicker = false
     @Published var showingCamera = false
     @Published var showVenueSearch = false
+    @Published var checkedDealIndices: Set<Int> = []
 
     // Venue search
     @Published var venueSearchQuery = ""
@@ -59,9 +60,7 @@ class AddDealViewModel: ObservableObject {
         do {
             let result = try await photoScanService.scanImage(image, venueName: selectedVenue?.name ?? "")
             scanResult = result
-            if let firstDeal = result.extractedDeals.first {
-                populateFromExtractedDeal(firstDeal)
-            }
+            checkedDealIndices = Set(0..<result.extractedDeals.count)
             if result.extractedDeals.isEmpty {
                 errorMessage = "No deals detected. Please fill in the details manually."
             }
@@ -234,7 +233,98 @@ class AddDealViewModel: ObservableObject {
         isLoading = false
     }
 
+    func submitCheckedDeals() async {
+        guard let venue = selectedVenue,
+              let userId = authService.currentUser?.id else {
+            errorMessage = "Please select a venue and sign in."
+            return
+        }
+
+        guard let allDeals = scanResult?.extractedDeals, !allDeals.isEmpty else { return }
+
+        let toSubmit = allDeals.enumerated()
+            .filter { checkedDealIndices.contains($0.offset) }
+            .map { $0.element }
+
+        guard !toSubmit.isEmpty else {
+            errorMessage = "Select at least one deal to add."
+            return
+        }
+
+        isLoading = true
+        errorMessage = nil
+
+        do {
+            let pvaConfig = try? await firestoreService.getPVAConfig()
+            let requiresApproval = pvaConfig?.requireApprovalForUserDeals ?? true
+
+            var imageURL: String? = nil
+            if let image = selectedImage {
+                imageURL = try? await uploadImage(image, venueId: venue.id)
+            }
+
+            for extracted in toSubmit {
+                let deal = Deal(
+                    id: UUID().uuidString,
+                    venueId: venue.id,
+                    venueName: venue.name,
+                    venueAddress: venue.formattedAddress,
+                    venueLatitude: venue.latitude,
+                    venueLongitude: venue.longitude,
+                    title: extracted.title,
+                    description: extracted.rawText.truncated(500),
+                    category: extracted.suggestedCategory,
+                    days: extracted.suggestedDays,
+                    startTime: extracted.suggestedStartTime,
+                    endTime: extracted.suggestedEndTime,
+                    source: .photo,
+                    status: requiresApproval ? .pending : .active,
+                    isVerified: !requiresApproval,
+                    upvotes: 0,
+                    downvotes: 0,
+                    reportCount: 0,
+                    imageURL: imageURL,
+                    sourceURL: nil,
+                    createdBy: userId,
+                    createdByName: authService.currentUser?.displayName,
+                    createdAt: Timestamp(),
+                    updatedAt: Timestamp(),
+                    expiresAt: nil,
+                    adminNotes: nil
+                )
+                try await firestoreService.saveDeal(deal)
+            }
+
+            try? await firestoreService.usersRef.document(userId).updateData([
+                "dealsSubmitted": FieldValue.increment(Int64(toSubmit.count))
+            ])
+
+            if !requiresApproval {
+                try? await firestoreService.updateVenueField(
+                    id: venue.id,
+                    field: "dealCount",
+                    value: FieldValue.increment(Int64(toSubmit.count))
+                )
+            }
+
+            let n = toSubmit.count
+            successMessage = requiresApproval
+                ? "\(n) deal\(n == 1 ? "" : "s") submitted for review!"
+                : "\(n) deal\(n == 1 ? "" : "s") added!"
+            HapticFeedback.success()
+            resetForm()
+        } catch {
+            errorMessage = "Failed to submit: \(error.localizedDescription)"
+            HapticFeedback.error()
+        }
+
+        isLoading = false
+    }
+
     private func uploadImage(_ image: UIImage, venueId: String) async throws -> String {
+        guard !venueId.isEmpty else {
+            throw NSError(domain: "StorageError", code: 0, userInfo: [NSLocalizedDescriptionKey: "Venue ID is missing — cannot upload photo."])
+        }
         guard let imageData = image.jpegData(compressionQuality: 0.7) else {
             throw NSError(domain: "ImageError", code: 0, userInfo: [NSLocalizedDescriptionKey: "Could not compress image"])
         }
@@ -262,5 +352,6 @@ class AddDealViewModel: ObservableObject {
         endTime = "19:00"
         scanResult = nil
         webScanResult = nil
+        checkedDealIndices = []
     }
 }

@@ -203,7 +203,7 @@ class AuthService: ObservableObject {
             if doc.exists, let data = doc.data() {
                 // Try the normal decode path first.
                 do {
-                    let user = try Firestore.Decoder().decode(AppUser.self, from: data)
+                    let user = try doc.data(as: AppUser.self)
                     var updated = user
                     updated.lastActiveAt = Timestamp()
                     try? await updateUserField(uid: user.id, field: "lastActiveAt", value: Timestamp())
@@ -263,7 +263,7 @@ class AuthService: ObservableObject {
             return nil
         }
         do {
-            return try Firestore.Decoder().decode(AppUser.self, from: data)
+            return try doc.data(as: AppUser.self)
         } catch {
             print("AuthService: failed to decode user doc — \(error). Raw fields: \(data.keys.sorted())")
             return nil

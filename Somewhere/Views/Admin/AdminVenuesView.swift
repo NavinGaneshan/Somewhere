@@ -15,8 +15,11 @@ struct AdminVenuesView: View {
             if filterClosed && !venue.isPermanentlyClosed { return false }
             if filterPending && venue.scanStatus != .pending { return false }
             if !searchQuery.isEmpty {
-                let q = searchQuery.lowercased()
-                return venue.name.lowercased().contains(q) || venue.address.lowercased().contains(q)
+                let q = searchQuery.trimmingCharacters(in: .whitespaces).lowercased()
+                return venue.name.lowercased().contains(q)
+                    || venue.address.lowercased().contains(q)
+                    || venue.city.lowercased().contains(q)
+                    || venue.zipCode.lowercased().contains(q)
             }
             return true
         }
@@ -60,9 +63,13 @@ struct AdminVenuesView: View {
                             }
                         )
                     }
+                    .listRowBackground(Color.appSurface)
+                    .listRowSeparatorTint(Color.appDivider)
                 }
             }
             .listStyle(.plain)
+            .scrollContentBackground(.hidden)
+            .background(Color.appBackground)
         }
         .background(Color.appBackground.ignoresSafeArea())
         .navigationTitle("Venues (\(viewModel.totalVenues))")
@@ -127,7 +134,7 @@ struct AdminVenueRow: View {
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 6) {
                     Text(venue.name)
-                        .font(.appSubheadline.weight(.medium))
+                        .font(.appSubheadlineMedium)
                         .foregroundColor(venue.isPermanentlyClosed ? .appSubtext : .appText)
                         .strikethrough(venue.isPermanentlyClosed)
                     if venue.isPermanentlyClosed {
@@ -212,18 +219,19 @@ struct AdminVenueDetailView: View {
                         .frame(width: 60, height: 60)
                         .clipShape(RoundedRectangle(cornerRadius: 10))
                     VStack(alignment: .leading, spacing: 4) {
-                        Text(venue.name).font(.appHeadline)
+                        Text(venue.name).font(.appHeadline).foregroundColor(.appText)
                         Text(venue.formattedAddress).font(.appCaption).foregroundColor(.appSubtext)
                         HStack(spacing: 6) {
                             Text(venue.category.displayName).font(.appCaption2).foregroundColor(.appSubtext)
-                            Text("·")
+                            Text("·").foregroundColor(.appSubtext)
                             scanStatusText(venue.scanStatus)
-                            Text("·")
+                            Text("·").foregroundColor(.appSubtext)
                             Text("\(deals.count) deal\(deals.count == 1 ? "" : "s")").font(.appCaption2).foregroundColor(.appSubtext)
                         }
                     }
                 }
                 .padding(.vertical, 4)
+                .listRowBackground(Color.appSurface)
             }
 
             // Actions
@@ -235,6 +243,7 @@ struct AdminVenueDetailView: View {
                     Label("Rescan for Deals", systemImage: "arrow.clockwise")
                         .foregroundColor(.appPrimary)
                 }
+                .listRowBackground(Color.appSurface)
                 if !venue.isPermanentlyClosed {
                     Button {
                         Task { await viewModel.markVenueClosed(id: venue.id) }
@@ -242,41 +251,46 @@ struct AdminVenueDetailView: View {
                         Label("Mark as Permanently Closed", systemImage: "xmark.circle")
                             .foregroundColor(.appWarning)
                     }
+                    .listRowBackground(Color.appSurface)
                 }
                 Button(role: .destructive) {
                     showingVenueDeleteConfirm = true
                 } label: {
                     Label("Delete Venue & All Deals", systemImage: "trash")
                 }
+                .listRowBackground(Color.appSurface)
             }
 
             // Deals
             Section {
                 if isLoading {
                     HStack { Spacer(); ProgressView(); Spacer() }.padding()
+                        .listRowBackground(Color.appSurface)
                 } else if deals.isEmpty {
                     Text("No deals found for this venue.")
                         .font(.appCaption)
                         .foregroundColor(.appSubtext)
                         .padding(.vertical, 8)
+                        .listRowBackground(Color.appSurface)
                 } else {
                     ForEach(deals) { deal in
-                        VStack(spacing: 0) {
-                            AdminDealCard(deal: deal) {
-                                dealToDelete = deal
-                                showingDeleteDealConfirm = true
-                            }
-                            Divider().padding(.leading, 16)
+                        AdminDealCard(deal: deal) {
+                            dealToDelete = deal
+                            showingDeleteDealConfirm = true
                         }
-                        .listRowInsets(EdgeInsets())
-                        .listRowSeparator(.hidden)
+                        .listRowBackground(Color.appSurface)
+                        .listRowSeparatorTint(Color.appDivider)
                     }
                 }
             } header: {
                 Text("Deals")
+                    .font(.appCaptionSemiBold)
+                    .foregroundColor(.appSubtext)
             }
         }
         .listStyle(.insetGrouped)
+        .scrollContentBackground(.hidden)
+        .background(Color.appBackground.ignoresSafeArea())
         .navigationTitle(venue.name)
         .navigationBarTitleDisplayMode(.inline)
         .onAppear { Task { await loadDeals() } }

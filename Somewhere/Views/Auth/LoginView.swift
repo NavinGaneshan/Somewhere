@@ -194,7 +194,7 @@ struct LoginView: View {
             Button("Sign up") {
                 showingSignUp = true
             }
-            .font(.appSubheadline.weight(.semibold))
+            .font(.appSubheadlineSemiBold)
             .foregroundColor(.appPrimary)
         }
     }
@@ -219,13 +219,14 @@ struct AuthTextField: View {
                 .textInputAutocapitalization(autocapitalization)
                 .autocorrectionDisabled()
                 .font(.appBody)
+                .foregroundColor(.appText)
         }
         .padding(.horizontal, 16)
-        .frame(height: 52)
+        .frame(height: 44)
         .background(Color.appSurface)
-        .cornerRadius(14)
+        .cornerRadius(12)
         .overlay(
-            RoundedRectangle(cornerRadius: 14)
+            RoundedRectangle(cornerRadius: 12)
                 .stroke(isValid ? Color.appDivider : Color.appError, lineWidth: 1)
         )
     }

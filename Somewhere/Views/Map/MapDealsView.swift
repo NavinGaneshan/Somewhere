@@ -50,9 +50,9 @@ struct MapDealsView: View {
                                 .font(.system(size: 18))
                                 .foregroundColor(.appText)
                                 .frame(width: 44, height: 44)
-                                .background(.ultraThinMaterial)
+                                .background(Color.appSurface)
                                 .cornerRadius(12)
-                                .shadow(color: .black.opacity(0.1), radius: 4, y: 2)
+                                .shadow(color: .black.opacity(0.12), radius: 6, y: 2)
                             if viewModel.filter.activeFilterCount > 0 {
                                 Text("\(viewModel.filter.activeFilterCount)")
                                     .font(.system(size: 10, weight: .bold))
@@ -78,15 +78,29 @@ struct MapDealsView: View {
             }
         }
         .onAppear {
-            if let location = locationService.userLocation {
-                region.center = location.coordinate
+            if let loc = locationService.userLocation {
+                region.center = loc.coordinate
+                Task { await viewModel.searchDeals(at: loc) }
+            } else if locationService.hasPermission {
+                Task { await viewModel.searchDeals() }
+            } else {
+                locationService.requestPermission()
             }
-            Task { await viewModel.searchDeals() }
+        }
+        .onChange(of: locationService.authorizationStatus) { status in
+            if status == .authorizedWhenInUse || status == .authorizedAlways {
+                if let loc = locationService.userLocation {
+                    Task { await viewModel.searchDeals(at: loc) }
+                } else {
+                    Task { await viewModel.searchDeals() }
+                }
+            }
         }
         .onChange(of: locationService.userLocation) { loc in
             if let loc = loc {
-                withAnimation {
-                    region.center = loc.coordinate
+                withAnimation { region.center = loc.coordinate }
+                if viewModel.filteredVenuesWithDeals.isEmpty {
+                    Task { await viewModel.searchDeals(at: loc) }
                 }
             }
         }
@@ -94,12 +108,24 @@ struct MapDealsView: View {
 
     private func selectedVenueCard(_ vwd: VenueWithDeals) -> some View {
         VStack(spacing: 0) {
-            // Handle bar
-            RoundedRectangle(cornerRadius: 2)
-                .fill(Color.appDivider)
-                .frame(width: 36, height: 4)
-                .padding(.top, 8)
-                .padding(.bottom, 4)
+            // Handle bar + close button
+            HStack {
+                Spacer()
+                RoundedRectangle(cornerRadius: 2)
+                    .fill(Color.appDivider)
+                    .frame(width: 36, height: 4)
+                Spacer()
+                Button {
+                    withAnimation { selectedVenueId = nil }
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 22))
+                        .foregroundColor(.appSubtext)
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.top, 10)
+            .padding(.bottom, 4)
 
             VenueCardView(
                 venueWithDeals: vwd,
@@ -135,17 +161,16 @@ struct VenueMapPin: View {
                         .shadow(color: pinColor.opacity(0.4), radius: isSelected ? 8 : 4, y: 2)
 
                     if venueWithDeals.hasActiveDeals {
-                        // Pulse ring
                         Circle()
-                            .stroke(pinColor.opacity(0.3), lineWidth: 2)
+                            .stroke(Color.activeGreen.opacity(0.45), lineWidth: 2)
                             .frame(width: isSelected ? 54 : 44, height: isSelected ? 54 : 44)
                     }
 
-                    Text(venue.category.icon)
-                        .font(.system(size: isSelected ? 20 : 16))
+                    Image(systemName: venue.category.icon)
+                        .font(.system(size: isSelected ? 18 : 14))
+                        .foregroundColor(.white)
                 }
 
-                // Deal count badge
                 if venueWithDeals.deals.count > 0 {
                     Text("\(venueWithDeals.deals.count)")
                         .font(.system(size: 10, weight: .bold))
@@ -162,7 +187,9 @@ struct VenueMapPin: View {
     }
 
     private var pinColor: Color {
-        if venueWithDeals.hasActiveDeals { return .appPrimary }
-        return .appSubtext
+        let counts = venueWithDeals.deals.reduce(into: [DealCategory: Int]()) { acc, deal in
+            acc[deal.category, default: 0] += 1
+        }
+        return counts.max(by: { $0.value < $1.value })?.key.uiColor ?? Color.appPrimary
     }
 }

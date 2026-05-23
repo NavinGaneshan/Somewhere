@@ -35,6 +35,8 @@ struct AdminDealsView: View {
                 }
             }
             .listStyle(.plain)
+            .scrollContentBackground(.hidden)
+            .background(Color.appBackground)
         }
         .background(Color.appBackground.ignoresSafeArea())
         .navigationTitle("Deals")
@@ -79,6 +81,7 @@ struct AdminDealsView: View {
                     Spacer()
                 }
             }
+            .listRowBackground(Color.appBackground)
         } else {
             ForEach(viewModel.pendingDeals) { deal in
                 PendingDealRow(deal: deal) {
@@ -87,6 +90,7 @@ struct AdminDealsView: View {
                     dealToReject = deal
                     showingRejectAlert = true
                 }
+                .listRowBackground(Color.appSurface)
             }
         }
     }
@@ -105,6 +109,7 @@ struct AdminDealsView: View {
             AdminDealRow(deal: deal) {
                 Task { await viewModel.deleteDeal(deal) }
             }
+            .listRowBackground(Color.appSurface)
         }
     }
 
@@ -130,7 +135,7 @@ struct AdminDealsView: View {
                 }
 
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("Rejection Reason").font(.appSubheadline.weight(.medium))
+                    Text("Rejection Reason").font(.appSubheadlineMedium)
                     ZStack(alignment: .topLeading) {
                         if rejectionNotes.isEmpty {
                             Text("Explain why this deal was rejected...")
@@ -175,6 +180,7 @@ struct AdminDealsView: View {
             }
         }
         .presentationDetents([.medium])
+        .environment(\.colorScheme, .dark)
     }
 }
 
@@ -187,14 +193,15 @@ struct PendingDealRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 10) {
-                Text(deal.category.icon)
-                    .font(.system(size: 20))
+                Image(systemName: deal.category.icon)
+                    .font(.system(size: 16))
+                    .foregroundColor(deal.category.uiColor)
                     .frame(width: 36, height: 36)
                     .background(deal.category.uiColor.opacity(0.12))
                     .cornerRadius(8)
 
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(deal.title).font(.appSubheadline.weight(.semibold))
+                    Text(deal.title).font(.appSubheadlineSemiBold)
                     Text(deal.venueName).font(.appCaption).foregroundColor(.appSubtext)
                 }
 
@@ -221,23 +228,25 @@ struct PendingDealRow: View {
             HStack(spacing: 10) {
                 Button(action: onApprove) {
                     Label("Approve", systemImage: "checkmark")
-                        .font(.appCaption.weight(.bold))
+                        .font(.appCaptionBold)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 8)
                         .background(Color.appSuccess)
                         .foregroundColor(.white)
                         .cornerRadius(8)
                 }
+                .buttonStyle(.borderless)
 
                 Button(action: onReject) {
                     Label("Reject", systemImage: "xmark")
-                        .font(.appCaption.weight(.bold))
+                        .font(.appCaptionBold)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 8)
                         .background(Color.appError)
                         .foregroundColor(.white)
                         .cornerRadius(8)
                 }
+                .buttonStyle(.borderless)
             }
             .padding(.top, 4)
         }
@@ -265,8 +274,9 @@ struct AdminDealCard: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .top, spacing: 10) {
                 // Category badge
-                Text(deal.category.icon)
-                    .font(.system(size: 20))
+                Image(systemName: deal.category.icon)
+                    .font(.system(size: 16))
+                    .foregroundColor(deal.category.uiColor)
                     .frame(width: 36, height: 36)
                     .background(deal.category.uiColor.opacity(0.12))
                     .cornerRadius(8)
@@ -274,7 +284,7 @@ struct AdminDealCard: View {
                 VStack(alignment: .leading, spacing: 3) {
                     HStack {
                         Text(deal.title)
-                            .font(.appSubheadline.weight(.semibold))
+                            .font(.appSubheadlineSemiBold)
                             .foregroundColor(.appText)
                         Spacer()
                         dealStatusBadge(deal.status)
@@ -307,8 +317,9 @@ struct AdminDealCard: View {
                         .font(.system(size: 13))
                         .foregroundColor(.appError)
                 }
+                .buttonStyle(.borderless)
             }
-            .font(.appCaption.weight(.medium))
+            .font(.appCaption)
             .foregroundColor(.appText)
         }
         .padding(.vertical, 10)

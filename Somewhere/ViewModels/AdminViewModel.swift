@@ -101,10 +101,9 @@ class AdminViewModel: ObservableObject {
 
     // MARK: - Venues
 
-    func loadVenues(limit: Int = 100) async {
+    func loadVenues(limit: Int = 500) async {
         do {
             let snapshot = try await firestoreService.venuesRef
-                .order(by: "createdAt", descending: true)
                 .limit(to: limit)
                 .getDocuments()
             var loaded = snapshot.documents.compactMap {
@@ -112,6 +111,8 @@ class AdminViewModel: ObservableObject {
             }
             if let loc = LocationService.shared.currentLocation {
                 loaded.sort { $0.distanceMiles(from: loc) < $1.distanceMiles(from: loc) }
+            } else {
+                loaded.sort { $0.name < $1.name }
             }
             venues = loaded
             totalVenues = try await firestoreService.getVenueCount()
@@ -141,6 +142,43 @@ class AdminViewModel: ObservableObject {
         } catch {
             errorMessage = "Failed to update venue."
         }
+    }
+
+    func deduplicateVenues() async {
+        isLoading = true
+        do {
+            let snapshot = try await firestoreService.venuesRef.getDocuments()
+            let allVenues = snapshot.documents.compactMap { Venue.fromFirestore($0.data(), id: $0.documentID) }
+
+            let grouped = Dictionary(grouping: allVenues, by: { $0.placeId })
+            var deletedVenueCount = 0
+            var deletedDealCount = 0
+
+            for (_, group) in grouped where group.count > 1 {
+                // Keep the venue with the most deals; on tie, keep the oldest
+                let sorted = group.sorted { lhs, rhs in
+                    if lhs.dealCount != rhs.dealCount { return lhs.dealCount > rhs.dealCount }
+                    return lhs.createdAt.dateValue() < rhs.createdAt.dateValue()
+                }
+                for venue in sorted.dropFirst() {
+                    let removed = try await firestoreService.deleteDealsForVenue(id: venue.id)
+                    try await firestoreService.venuesRef.document(venue.id).delete()
+                    deletedVenueCount += 1
+                    deletedDealCount += removed
+                }
+            }
+
+            if deletedVenueCount == 0 {
+                successMessage = "No duplicate venues found."
+            } else {
+                successMessage = "Removed \(deletedVenueCount) duplicate venue\(deletedVenueCount == 1 ? "" : "s") and \(deletedDealCount) deal\(deletedDealCount == 1 ? "" : "s")."
+            }
+            HapticFeedback.success()
+            await loadVenues()
+        } catch {
+            errorMessage = "Deduplication failed: \(error.localizedDescription)"
+        }
+        isLoading = false
     }
 
     func deleteAllVenuesAndDeals() async {

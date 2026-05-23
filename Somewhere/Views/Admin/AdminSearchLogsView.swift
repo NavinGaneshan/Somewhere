@@ -9,13 +9,18 @@ struct AdminSearchLogsView: View {
                 Text("No search logs yet. Any pull-to-refresh on Home will generate one.")
                     .font(.appCaption)
                     .foregroundColor(.appSubtext)
-                    .listRowBackground(Color.clear)
+                    .listRowBackground(Color.appBackground)
             }
 
             ForEach(viewModel.searchLogs, id: \.id) { log in
                 SearchLogRow(log: log)
+                    .listRowBackground(Color.appSurface)
+                    .listRowSeparatorTint(Color.appDivider)
             }
         }
+        .listStyle(.plain)
+        .scrollContentBackground(.hidden)
+        .background(Color.appBackground.ignoresSafeArea())
         .navigationTitle("Search Logs")
         .navigationBarTitleDisplayMode(.inline)
         .refreshable {
@@ -56,7 +61,7 @@ struct SearchLogRow: View {
                 Spacer()
                 if log.apiCallsMade > 0 {
                     Text("\(log.apiCallsMade) API call\(log.apiCallsMade == 1 ? "" : "s")")
-                        .font(.appCaption2.weight(.semibold))
+                        .font(.appCaption2SemiBold)
                         .padding(.horizontal, 6)
                         .padding(.vertical, 2)
                         .background(Color.appAccent.opacity(0.15))
@@ -66,7 +71,7 @@ struct SearchLogRow: View {
             }
 
             Text(String(format: "%.4f, %.4f  ·  %.1f mi radius", log.latitude, log.longitude, log.radius))
-                .font(.appCaption.weight(.medium))
+                .font(.appCaption)
                 .foregroundColor(.appText)
 
             HStack(spacing: 12) {

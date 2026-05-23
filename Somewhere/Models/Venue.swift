@@ -28,13 +28,13 @@ enum VenueCategory: String, Codable, CaseIterable, Identifiable {
 
     var icon: String {
         switch self {
-        case .bar: return "🍺"
-        case .restaurant: return "🍽️"
-        case .brewery: return "🍻"
-        case .winery: return "🍷"
-        case .lounge: return "🥂"
-        case .sportsBar: return "⚽"
-        case .other: return "📍"
+        case .bar:        return "wineglass"
+        case .restaurant: return "fork.knife"
+        case .brewery:    return "mug.fill"
+        case .winery:     return "wineglass.fill"
+        case .lounge:     return "sparkles"
+        case .sportsBar:  return "sportscourt.fill"
+        case .other:      return "mappin"
         }
     }
 }

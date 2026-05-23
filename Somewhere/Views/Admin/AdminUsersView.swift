@@ -53,9 +53,13 @@ struct AdminUsersView: View {
                     } onToggleBan: { banned in
                         Task { await viewModel.toggleBanUser(userId: user.id, banned: banned) }
                     }
+                    .listRowBackground(Color.appSurface)
+                    .listRowSeparatorTint(Color.appDivider)
                 }
             }
             .listStyle(.plain)
+            .scrollContentBackground(.hidden)
+            .background(Color.appBackground)
         }
         .background(Color.appBackground.ignoresSafeArea())
         .navigationTitle("Users (\(viewModel.totalUsers))")
@@ -90,7 +94,7 @@ struct AdminUserRow: View {
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 6) {
                     Text(user.displayName)
-                        .font(.appSubheadline.weight(.medium))
+                        .font(.appSubheadlineMedium)
                         .foregroundColor(user.isBanned ? .appError : .appText)
                     if user.isBanned {
                         Text("BANNED")

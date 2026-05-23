@@ -28,7 +28,7 @@ struct MainTabView: View {
             // Add Deal (center tab)
             Color.clear
                 .tabItem {
-                    Label("Add Deal", systemImage: "plus.circle.fill")
+                    Label("Share", systemImage: "plus.circle.fill")
                 }
                 .tag(2)
 
