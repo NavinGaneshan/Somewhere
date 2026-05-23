@@ -4,6 +4,7 @@
  */
 
 const functions = require("firebase-functions");
+const { defineSecret } = require("firebase-functions/params");
 const admin = require("firebase-admin");
 const axios = require("axios");
 const cheerio = require("cheerio");
@@ -12,11 +13,176 @@ admin.initializeApp();
 const db = admin.firestore();
 
 // ============================================================
+// SECRETS (Google Cloud Secret Manager via firebase-functions/params)
+// Set with: firebase functions:secrets:set ANTHROPIC_KEY
+//           firebase functions:secrets:set FIRECRAWL_KEY
+// ============================================================
+const anthropicKey = defineSecret("ANTHROPIC_KEY");
+const firecrawlKey = defineSecret("FIRECRAWL_KEY");
+
+// ============================================================
 // CONSTANTS
 // ============================================================
+// PLACES_API_KEY is still on the legacy functions.config() system; migrate later.
 const PLACES_API_KEY = functions.config().places?.api_key || process.env.PLACES_API_KEY;
-const OPENAI_API_KEY = functions.config().openai?.api_key || process.env.OPENAI_API_KEY;
 const PLACES_API_BASE = "https://maps.googleapis.com/maps/api/place";
+const ANTHROPIC_ENDPOINT = "https://api.anthropic.com/v1/messages";
+const FIRECRAWL_SCRAPE_ENDPOINT = "https://api.firecrawl.dev/v1/scrape";
+const ANTHROPIC_MODEL = "claude-haiku-4-5-20251001";
+
+// Mirrors the prompt in the (now-removed) iOS AnthropicService.
+const ANTHROPIC_SYSTEM_PROMPT = `You extract happy hour and daily specials deals from bar/restaurant text. Return ONLY a JSON object — no markdown fences, no explanation before or after.
+
+INCLUDE a deal when ALL of these are true:
+• It names a food or drink item (or a bar event like trivia/karaoke)
+• It has a price, discount, or offer (e.g. $6, half off, 50% off, 2-for-1, half-priced, complimentary)
+• It is tied to specific days or a time window. If the section is labelled "Happy Hour", "Specials", or a day of the week, use those as context.
+
+EXCLUDE:
+• Regular full-price menu items with no discount
+• Generic descriptions with no price or offer
+• Standard cocktail/drink menus unless they explicitly reference a special, discount, or time offer
+
+TITLE: 2–5 words, item name + price or discount (e.g. "House Margarita $6", "Wings Half Off", "Draft Beer $4", "Trivia Night")
+CATEGORY: "drinks", "food", or "activity"
+DAYS: lowercase array of day names
+TIMES: 24-hour "HH:MM". Default happy hour: startTime "16:00", endTime "19:00"
+CONFIDENCE: 0.0–1.0
+
+Respond with ONLY this JSON, nothing else:
+{"deals":[{"title":"...","description":"...","category":"drinks","days":["monday"],"startTime":"16:00","endTime":"19:00","confidence":0.85}]}
+
+If nothing qualifies: {"deals":[]}`;
+
+const FIRECRAWL_DEAL_LINK_PATTERN = /(menu|happy.?hour|happyhour|specials?|deals?|cocktails?|drinks?|promotions?|events?)/i;
+const CLOSURE_KEYWORDS = [
+  "permanently closed", "we are closed", "out of business",
+  "closed permanently", "no longer open", "has closed",
+  "closing permanently", "we have closed", "restaurant is closed",
+  "this location is closed",
+];
+const MAX_SUBPAGES = 3;
+const MAX_TEXT_CHARS = 8000;
+
+// Serialize Anthropic calls to stay under the 50 req/min rate limit.
+let _lastAnthropicCall = 0;
+const ANTHROPIC_MIN_INTERVAL_MS = 1500;
+
+async function _throttleAnthropic() {
+  const elapsed = Date.now() - _lastAnthropicCall;
+  if (elapsed < ANTHROPIC_MIN_INTERVAL_MS) {
+    await sleep(ANTHROPIC_MIN_INTERVAL_MS - elapsed);
+  }
+  _lastAnthropicCall = Date.now();
+}
+
+/**
+ * Sends text to Claude and returns the parsed deals array.
+ * Returns [] on any error so callers can fall back gracefully.
+ */
+async function extractDealsViaAnthropic(text, sourceURL, apiKey) {
+  if (!apiKey) {
+    console.warn("Anthropic key not configured; skipping LLM extraction");
+    return [];
+  }
+  const trimmed = (text || "").substring(0, MAX_TEXT_CHARS).trim();
+  if (!trimmed) return [];
+
+  await _throttleAnthropic();
+
+  let userContent = "Extract happy hour deals from this text";
+  if (sourceURL) userContent += ` (source: ${sourceURL})`;
+  userContent += `:\n\n${trimmed}`;
+
+  const body = {
+    model: ANTHROPIC_MODEL,
+    max_tokens: 1024,
+    system: ANTHROPIC_SYSTEM_PROMPT,
+    messages: [{ role: "user", content: userContent }],
+  };
+
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      const response = await axios.post(ANTHROPIC_ENDPOINT, body, {
+        headers: {
+          "Content-Type": "application/json",
+          "x-api-key": apiKey,
+          "anthropic-version": "2023-06-01",
+        },
+        timeout: 30000,
+        validateStatus: () => true,
+      });
+
+      if (response.status === 429 && attempt === 1) {
+        console.warn("Anthropic 429; retrying after 5s");
+        await sleep(5000);
+        _lastAnthropicCall = Date.now();
+        continue;
+      }
+      if (response.status !== 200) {
+        console.error("Anthropic HTTP", response.status, JSON.stringify(response.data).substring(0, 300));
+        return [];
+      }
+
+      const rawText = response.data?.content?.[0]?.text || "";
+      const start = rawText.indexOf("{");
+      const end = rawText.lastIndexOf("}");
+      if (start === -1 || end === -1) {
+        console.error("Anthropic: no JSON object in response:", rawText.substring(0, 200));
+        return [];
+      }
+      try {
+        const parsed = JSON.parse(rawText.substring(start, end + 1));
+        return Array.isArray(parsed.deals) ? parsed.deals : [];
+      } catch (parseErr) {
+        console.error("Anthropic JSON parse failed:", parseErr.message, rawText.substring(0, 200));
+        return [];
+      }
+    } catch (err) {
+      console.error("Anthropic request error:", err.message);
+      return [];
+    }
+  }
+  return [];
+}
+
+/**
+ * Scrape one URL via Firecrawl. Throws on hard failure so callers can decide
+ * whether to swallow (subpages) or surface (main page) the error.
+ */
+async function firecrawlScrape(url, apiKey) {
+  if (!apiKey) {
+    throw new functions.https.HttpsError("failed-precondition", "Firecrawl API key not configured");
+  }
+  const response = await axios.post(FIRECRAWL_SCRAPE_ENDPOINT, {
+    url,
+    formats: ["markdown", "links"],
+    onlyMainContent: true,
+    timeout: 25000,
+  }, {
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${apiKey}`,
+    },
+    timeout: 35000,
+    validateStatus: () => true,
+  });
+
+  if (response.status === 402 || response.status === 429) {
+    throw new functions.https.HttpsError("resource-exhausted", "Firecrawl quota exceeded");
+  }
+  if (response.status < 200 || response.status >= 300) {
+    console.error("Firecrawl HTTP", response.status, "for", url);
+    throw new functions.https.HttpsError("internal", `Firecrawl HTTP ${response.status}`);
+  }
+  if (!response.data?.success || !response.data?.data) {
+    throw new functions.https.HttpsError("internal", "Firecrawl returned no data");
+  }
+  return {
+    markdown: response.data.data.markdown || "",
+    links: response.data.data.links || [],
+  };
+}
 
 // ============================================================
 // PVA - PROGRESSIVE VENUE ADDITION
@@ -176,101 +342,122 @@ async function processPVA(latitude, longitude, radiusMiles, userId) {
 
 /**
  * Scan a venue website to extract happy hour deals.
+ * Pipeline: Firecrawl scrape (main + dealish subpages) → Claude extraction.
  * Called by the mobile app when a user provides a URL.
  */
 exports.scanWebsite = functions
-    .runWith({ timeoutSeconds: 60, memory: "256MB" })
+    .runWith({
+      timeoutSeconds: 120,
+      memory: "512MB",
+      secrets: [anthropicKey, firecrawlKey],
+    })
     .https.onCall(async (data, context) => {
       if (!context.auth) {
         throw new functions.https.HttpsError("unauthenticated", "Must be authenticated.");
       }
 
-      const { url, venueId, venueName } = data;
-      if (!url) {
+      const { url } = data || {};
+      if (!url || typeof url !== "string") {
         throw new functions.https.HttpsError("invalid-argument", "URL required.");
       }
 
+      const ANTHROPIC = anthropicKey.value();
+      const FIRECRAWL = firecrawlKey.value();
+      const normalizedUrl = url.startsWith("http") ? url : `https://${url}`;
+
       try {
-        const result = await scrapeWebsiteForDeals(url, venueName || "");
-        return result;
+        // 1. Scrape main page (hard failure if this errors)
+        const main = await firecrawlScrape(normalizedUrl, FIRECRAWL);
+
+        // 2. Closure detection — if the homepage announces closure, skip extraction
+        const lowerMd = main.markdown.toLowerCase();
+        if (CLOSURE_KEYWORDS.some((k) => lowerMd.includes(k))) {
+          console.log("scanWebsite: closure detected at", normalizedUrl);
+          return {
+            url: normalizedUrl,
+            extractedDeals: [],
+            isPermanentlyClosed: true,
+            extractionMethod: "firecrawl+claude",
+          };
+        }
+
+        // 3. Find deal-relevant subpages on the same host
+        let rootHost;
+        try {
+          rootHost = new URL(normalizedUrl).host;
+        } catch (_) {
+          rootHost = null;
+        }
+        const subLinks = main.links
+            .filter((l) => typeof l === "string" && FIRECRAWL_DEAL_LINK_PATTERN.test(l))
+            .filter((l) => {
+              try {
+                return rootHost && new URL(l).host === rootHost;
+              } catch (_) {
+                return false;
+              }
+            })
+            .filter((l) => l !== normalizedUrl)
+            .slice(0, MAX_SUBPAGES);
+
+        // 4. Scrape subpages (swallow errors — main page already succeeded)
+        let combined = main.markdown;
+        for (const link of subLinks) {
+          try {
+            const sub = await firecrawlScrape(link, FIRECRAWL);
+            if (sub.markdown) {
+              combined += "\n\n---\n\n" + sub.markdown;
+              console.log(`scanWebsite: scraped subpage ${link} (${sub.markdown.length} chars)`);
+            }
+          } catch (subErr) {
+            console.warn(`scanWebsite: subpage ${link} failed:`, subErr.message);
+          }
+        }
+
+        console.log(`scanWebsite: total markdown ${combined.length} chars for ${normalizedUrl}`);
+
+        // 5. Claude extraction
+        const deals = await extractDealsViaAnthropic(combined, normalizedUrl, ANTHROPIC);
+        return {
+          url: normalizedUrl,
+          extractedDeals: deals,
+          isPermanentlyClosed: false,
+          extractionMethod: "firecrawl+claude",
+        };
       } catch (err) {
-        console.error("Website scan error:", err);
+        if (err instanceof functions.https.HttpsError) throw err;
+        console.error("scanWebsite error:", err.message);
         throw new functions.https.HttpsError("internal", `Failed to scan website: ${err.message}`);
       }
     });
 
-async function scrapeWebsiteForDeals(url, venueName) {
-  const normalizedUrl = url.startsWith("http") ? url : `https://${url}`;
-
-  const response = await axios.get(normalizedUrl, {
-    timeout: 20000,
-    headers: {
-      "User-Agent": "Mozilla/5.0 (compatible; SomewhereBot/1.0; +https://hhsomewhere.com/bot)",
-    },
-    maxRedirects: 5,
-  });
-
-  const html = response.data;
-  const $ = cheerio.load(html);
-
-  // Remove non-content elements
-  $("script, style, nav, footer, header, iframe").remove();
-
-  // Get text content
-  const text = $("body").text().replace(/\s+/g, " ").trim();
-
-  // Use OpenAI if available for better extraction
-  if (OPENAI_API_KEY) {
-    return await extractDealsWithAI(text, venueName, url);
-  }
-
-  // Fallback: regex-based extraction
-  return extractDealsWithRegex(text, url);
-}
-
-async function extractDealsWithAI(text, venueName, sourceUrl) {
-  const { OpenAI } = require("openai");
-  const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
-
-  const prompt = `You are extracting happy hour deals from restaurant/bar website text.
-
-Venue: ${venueName || "Unknown"}
-Website text (truncated to 3000 chars):
-${text.substring(0, 3000)}
-
-Extract all happy hour deals. For each deal return JSON with:
-- title: short deal name
-- description: full description
-- category: "drinks" | "food" | "activity"
-- days: array of "monday"|"tuesday"|"wednesday"|"thursday"|"friday"|"saturday"|"sunday"
-- startTime: "HH:mm" 24-hour format
-- endTime: "HH:mm" 24-hour format
-
-Return JSON array. Return [] if no happy hour deals found.`;
-
-  try {
-    const completion = await openai.chat.completions.create({
-      model: "gpt-3.5-turbo",
-      messages: [{ role: "user", content: prompt }],
-      response_format: { type: "json_object" },
-      temperature: 0.1,
+/**
+ * Extract deals from arbitrary text (e.g. OCR output from a menu photo).
+ * Called by PhotoScanService after on-device Vision OCR.
+ */
+exports.extractDealsFromText = functions
+    .runWith({
+      timeoutSeconds: 60,
+      memory: "256MB",
+      secrets: [anthropicKey],
+    })
+    .https.onCall(async (data, context) => {
+      if (!context.auth) {
+        throw new functions.https.HttpsError("unauthenticated", "Must be authenticated.");
+      }
+      const { text, sourceURL } = data || {};
+      if (!text || typeof text !== "string" || !text.trim()) {
+        return { extractedDeals: [] };
+      }
+      try {
+        const ANTHROPIC = anthropicKey.value();
+        const deals = await extractDealsViaAnthropic(text, sourceURL || null, ANTHROPIC);
+        return { extractedDeals: deals };
+      } catch (err) {
+        console.error("extractDealsFromText error:", err.message);
+        throw new functions.https.HttpsError("internal", `Extraction failed: ${err.message}`);
+      }
     });
-
-    const content = completion.choices[0].message.content;
-    const parsed = JSON.parse(content);
-    const deals = parsed.deals || parsed || [];
-
-    return {
-      success: true,
-      url: sourceUrl,
-      extractedDeals: Array.isArray(deals) ? deals : [],
-      extractionMethod: "ai",
-    };
-  } catch (err) {
-    console.error("OpenAI extraction error:", err);
-    return extractDealsWithRegex(text, sourceUrl);
-  }
-}
 
 function extractDealsWithRegex(text, sourceUrl) {
   const lower = text.toLowerCase();

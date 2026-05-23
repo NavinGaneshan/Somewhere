@@ -31,17 +31,36 @@ extension View {
 
 // MARK: - Font Extensions
 extension Font {
-    static let appLargeTitle = Font.system(size: 34, weight: .bold, design: .rounded)
-    static let appTitle = Font.system(size: 28, weight: .bold, design: .rounded)
-    static let appTitle2 = Font.system(size: 22, weight: .semibold, design: .rounded)
-    static let appTitle3 = Font.system(size: 20, weight: .semibold, design: .rounded)
-    static let appHeadline = Font.system(size: 17, weight: .semibold, design: .default)
-    static let appBody = Font.system(size: 17, weight: .regular, design: .default)
-    static let appCallout = Font.system(size: 16, weight: .regular, design: .default)
-    static let appSubheadline = Font.system(size: 15, weight: .regular, design: .default)
-    static let appFootnote = Font.system(size: 13, weight: .regular, design: .default)
-    static let appCaption = Font.system(size: 12, weight: .regular, design: .default)
-    static let appCaption2 = Font.system(size: 11, weight: .regular, design: .default)
+    // Display — Fraunces (editorial serif)
+    static let appLargeTitle = Font.custom("Fraunces-Light", size: 42, relativeTo: .largeTitle)
+    static let appTitle = Font.custom("Fraunces-Light", size: 28, relativeTo: .title)
+    static let appTitle2 = Font.custom("Fraunces-Light", size: 22, relativeTo: .title2)
+    static let appTitle3 = Font.custom("Fraunces-Light", size: 20, relativeTo: .title3)
+    static let appQuote = Font.custom("Fraunces-Italic", size: 17, relativeTo: .headline)
+
+    // UI — Inter Tight
+    static let appHeadline    = Font.custom("InterTight-SemiBold", size: 15, relativeTo: .headline)
+    static let appBody        = Font.custom("InterTight-Regular",  size: 15, relativeTo: .body)
+    static let appCallout     = Font.custom("InterTight-Regular",  size: 16, relativeTo: .callout)
+    static let appFootnote    = Font.custom("InterTight-Regular",  size: 13, relativeTo: .footnote)
+
+    // Subheadline weight variants (13 pt) — use these instead of .appSubheadline.weight(...)
+    static let appSubheadline         = Font.custom("InterTight-Regular",  size: 13, relativeTo: .subheadline)
+    static let appSubheadlineMedium   = Font.custom("InterTight-Medium",   size: 13, relativeTo: .subheadline)
+    static let appSubheadlineSemiBold = Font.custom("InterTight-SemiBold", size: 13, relativeTo: .subheadline)
+    static let appSubheadlineBold     = Font.custom("InterTight-Bold",     size: 13, relativeTo: .subheadline)
+
+    // Caption weight variants (11 pt) — use these instead of .appCaption.weight(...)
+    static let appCaption         = Font.custom("InterTight-Medium",   size: 11, relativeTo: .caption)
+    static let appCaptionSemiBold = Font.custom("InterTight-SemiBold", size: 11, relativeTo: .caption)
+    static let appCaptionBold     = Font.custom("InterTight-Bold",     size: 11, relativeTo: .caption)
+
+    // Caption2 weight variants (11 pt)
+    static let appCaption2         = Font.custom("InterTight-Regular",  size: 11, relativeTo: .caption2)
+    static let appCaption2SemiBold = Font.custom("InterTight-SemiBold", size: 11, relativeTo: .caption2)
+
+    // Mono — for time, coords, micro-labels
+    static let appMono = Font.system(.caption, design: .monospaced)
 }
 
 // MARK: - Date Extensions
@@ -154,28 +173,58 @@ extension UIApplication {
     }
 }
 
-// MARK: - AsyncImage placeholder
+// MARK: - Venue Photo View
+/// Loads Google Places photos with the X-Ios-Bundle-Identifier header set,
+/// which is required by the iOS-app restriction on the Places API key.
+/// SwiftUI's `AsyncImage` can't customize the request, so we do the fetch ourselves.
 struct VenuePhotoView: View {
     let photoReference: String?
     let maxWidth: CGFloat
 
+    @State private var uiImage: UIImage?
+    @State private var didFail = false
+
     var body: some View {
-        if let ref = photoReference,
-           let url = PlacesService.shared.photoURL(reference: ref, maxWidth: Int(maxWidth)) {
-            AsyncImage(url: url) { phase in
-                switch phase {
-                case .success(let image):
-                    image.resizable().scaledToFill()
-                case .failure:
-                    placeholderView
-                case .empty:
-                    placeholderView.overlay(ProgressView().tint(.gray))
-                @unknown default:
-                    placeholderView
-                }
+        Group {
+            if let uiImage {
+                Image(uiImage: uiImage).resizable().scaledToFill()
+            } else if didFail || photoReference == nil {
+                placeholderView
+            } else {
+                placeholderView.overlay(ProgressView().tint(.gray))
             }
-        } else {
-            placeholderView
+        }
+        .task(id: photoReference) {
+            await load()
+        }
+    }
+
+    private func load() async {
+        uiImage = nil
+        didFail = false
+
+        guard let ref = photoReference,
+              let url = PlacesService.shared.photoURL(reference: ref, maxWidth: Int(maxWidth)) else {
+            didFail = true
+            return
+        }
+
+        var request = URLRequest(url: url)
+        if let bundleId = Bundle.main.bundleIdentifier {
+            request.setValue(bundleId, forHTTPHeaderField: "X-Ios-Bundle-Identifier")
+        }
+
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            if let http = response as? HTTPURLResponse,
+               http.statusCode == 200,
+               let image = UIImage(data: data) {
+                self.uiImage = image
+            } else {
+                didFail = true
+            }
+        } catch {
+            didFail = true
         }
     }
 

@@ -33,8 +33,6 @@
 	<string>828696832700-2ivg0gt1l627g7on0qrglisgcbejpu11.apps.googleusercontent.com</string>
 	<key>GOOGLE_PLACES_API_KEY</key>
 	<string>AIzaSyCZ0Dn0BQtXPH7q5GUMPmJMZiSpzZCFv7Q</string>
-	<key>ANTHROPIC_API_KEY</key>
-	<string>REDACTED_ANTHROPIC_KEY_REVOKED</string>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
 	<key>LSApplicationQueriesSchemes</key>
@@ -58,6 +56,12 @@
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>location</string>
+	</array>
+	<key>UIAppFonts</key>
+	<array>
+		<string>Fraunces.ttf</string>
+		<string>Fraunces-Italic.ttf</string>
+		<string>InterTight.ttf</string>
 	</array>
 	<key>UILaunchStoryboardName</key>
 	<string>LaunchScreen</string>

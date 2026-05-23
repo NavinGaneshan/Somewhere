@@ -68,7 +68,7 @@ actor PVAService {
             minLat: bounds.minLat, maxLat: bounds.maxLat,
             minLng: bounds.minLng, maxLng: bounds.maxLng
         )
-        let existingPlaceIds = Set(existingVenues.map { $0.placeId })
+        var existingPlaceIds = Set(existingVenues.map { $0.placeId })
 
         // Process each cell that needs searching
         var newVenueCount = 0
@@ -92,6 +92,9 @@ actor PVAService {
                     config: config,
                     userId: userId
                 )
+
+                // Update known place IDs so subsequent cells don't re-add the same venue
+                existingPlaceIds.formUnion(searchResult.addedPlaceIds)
 
                 newVenueCount += searchResult.added
                 result.newVenuesAdded += searchResult.added
@@ -152,6 +155,7 @@ actor PVAService {
         var existing: Int = 0
         var closed: Int = 0
         var apiCalls: Int = 0
+        var addedPlaceIds: [String] = []
     }
 
     private func searchCell(
@@ -195,6 +199,7 @@ actor PVAService {
                 // New venue - add to database
                 await addNewVenue(from: placeVenue, autoScan: config.autoScanWebsites, userId: userId)
                 result.added += 1
+                result.addedPlaceIds.append(placeVenue.placeId)
 
                 if result.added >= config.maxNewVenuesPerSearch {
                     return result
@@ -294,15 +299,25 @@ actor PVAService {
         let website = details?.website ?? ""
         let photoRefs = (try? await PlacesService.shared.getPlacePhotoReferences(placeId: placeId, venueName: venueName, limit: 10)) ?? []
 
-        // 2. Website scan (already follows menu links and OCRs site images).
+        // 2. Website scan via server-side scanWebsite (Firecrawl + Claude) Cloud Function.
         var allExtracted: [ExtractedDeal] = []
         var sources: [String] = []
         if !website.isEmpty {
             do {
                 let webScan = try await WebScanService.shared.scanForDeals(url: website)
+
+                // Closure detected on homepage — mark venue and bail out immediately.
+                if webScan.isPermanentlyClosed {
+                    print("PVAService auto-scan: \(venueName) homepage says permanently closed — marking venue")
+                    try? await FirestoreService.shared.markVenueClosed(id: venueId)
+                    return
+                }
+
                 allExtracted.append(contentsOf: webScan.extractedDeals)
                 sources.append("website")
                 print("PVAService auto-scan: \(venueName) website → \(webScan.extractedDeals.count) deals")
+            } catch WebScanError.missingAPIKey {
+                print("PVAService auto-scan: scanWebsite function not configured, skipping web scan for \(venueName)")
             } catch {
                 print("PVAService auto-scan: \(venueName) website scan failed: \(error)")
             }
@@ -546,7 +561,7 @@ actor PVAService {
             minLat: bounds.minLat, maxLat: bounds.maxLat,
             minLng: bounds.minLng, maxLng: bounds.maxLng
         )) ?? []
-        let existingPlaceIds = Set(existingVenues.map { $0.placeId })
+        var existingPlaceIds = Set(existingVenues.map { $0.placeId })
 
         var newCount = 0
         for cellId in cellIds {
@@ -559,6 +574,7 @@ actor PVAService {
                 userId: userId
             ) else { continue }
 
+            existingPlaceIds.formUnion(result.addedPlaceIds)
             newCount += result.added
 
             let existingCell = try? await firestoreService.getPVACell(id: cellId)
