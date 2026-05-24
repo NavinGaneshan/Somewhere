@@ -28,7 +28,7 @@
 		</dict>
 	</array>
 	<key>CFBundleVersion</key>
-	<string>1</string>
+	<string>3</string>
 	<key>GIDClientID</key>
 	<string>828696832700-2ivg0gt1l627g7on0qrglisgcbejpu11.apps.googleusercontent.com</string>
 	<key>GOOGLE_PLACES_API_KEY</key>
@@ -48,6 +48,12 @@
 	<string>Somewhere needs your location to find happy hour deals near you.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>Somewhere accesses your photos to scan for happy hour deals.</string>
+	<key>UIAppFonts</key>
+	<array>
+		<string>Fraunces.ttf</string>
+		<string>Fraunces-Italic.ttf</string>
+		<string>InterTight.ttf</string>
+	</array>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>
@@ -57,13 +63,20 @@
 	<array>
 		<string>location</string>
 	</array>
-	<key>UIAppFonts</key>
+	<key>UILaunchScreen</key>
+	<dict/>
+	<key>UISupportedInterfaceOrientations</key>
 	<array>
-		<string>Fraunces.ttf</string>
-		<string>Fraunces-Italic.ttf</string>
-		<string>InterTight.ttf</string>
+		<string>UIInterfaceOrientationPortrait</string>
+		<string>UIInterfaceOrientationLandscapeLeft</string>
+		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
-	<key>UILaunchStoryboardName</key>
-	<string>LaunchScreen</string>
+	<key>UISupportedInterfaceOrientations~ipad</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+		<string>UIInterfaceOrientationPortraitUpsideDown</string>
+		<string>UIInterfaceOrientationLandscapeLeft</string>
+		<string>UIInterfaceOrientationLandscapeRight</string>
+	</array>
 </dict>
 </plist>

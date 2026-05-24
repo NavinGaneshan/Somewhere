@@ -18,8 +18,8 @@ settings:
   base:
     SWIFT_VERSION: "5.9"
     MARKETING_VERSION: "1.0.0"
-    CURRENT_PROJECT_VERSION: "1"
-    DEVELOPMENT_TEAM: ""  # Set your Apple Developer Team ID
+    CURRENT_PROJECT_VERSION: "3"
+    DEVELOPMENT_TEAM: "R4SV6TP7KZ"
     CODE_SIGN_STYLE: Automatic
 
 targets:
@@ -41,11 +41,16 @@ targets:
         CFBundleName: Somewhere
         CFBundleDisplayName: Somewhere
         CFBundleIdentifier: com.hhsomewhere.app
-        CFBundleVersion: "1"
+        CFBundleVersion: "3"
         CFBundleShortVersionString: "1.0.0"
-        UILaunchStoryboardName: LaunchScreen
+        # Modern (iOS 14+) launch screen — empty dict gives system-default white background.
+        UILaunchScreen: {}
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: false
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
         NSLocationWhenInUseUsageDescription: "Somewhere needs your location to find happy hour deals near you."
         NSLocationAlwaysAndWhenInUseUsageDescription: "Somewhere uses your location to find happy hour deals near you."
         NSCameraUsageDescription: "Somewhere uses your camera to scan menus and signs for happy hour deals."
@@ -67,6 +72,7 @@ targets:
         INFOPLIST_FILE: Somewhere/Resources/Info.plist
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         SWIFT_ACTIVE_COMPILATION_CONDITIONS: ""
+        TARGETED_DEVICE_FAMILY: "1"   # iPhone only (was "1,2" — dropped iPad for v1 launch)
       configs:
         Debug:
           SWIFT_ACTIVE_COMPILATION_CONDITIONS: DEBUG
