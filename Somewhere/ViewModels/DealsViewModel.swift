@@ -25,7 +25,6 @@ class DealsViewModel: ObservableObject {
     private var deals: [Deal] = []
     private var venues: [Venue] = []
     private var loadTask: Task<Void, Never>?
-    private var scrubTime: Int? = nil
 
     // MARK: - Search
 
@@ -155,9 +154,7 @@ class DealsViewModel: ObservableObject {
                 if filter.showOnlyFavorites && !favoriteVenueIds.contains(vwd.venue.id) { return nil }
                 guard filter.matches(venue: vwd.venue, from: userLocation) else { return nil }
                 let filteredDeals = vwd.deals.filter { deal in
-                    guard filter.matches(deal: deal) else { return false }
-                    if let t = scrubTime { return deal.isActive(atMinutes: t) }
-                    return true
+                    filter.matches(deal: deal)
                 }
                 guard !filteredDeals.isEmpty else { return nil }
                 return VenueWithDeals(venue: vwd.venue, deals: filteredDeals, isExpanded: vwd.isExpanded)
@@ -176,11 +173,6 @@ class DealsViewModel: ObservableObject {
                     return lhs.deals.map { $0.score }.max() ?? 0 > rhs.deals.map { $0.score }.max() ?? 0
                 }
             }
-    }
-
-    func setScrubTime(_ minutes: Int?) {
-        scrubTime = minutes
-        applyFilter()
     }
 
     func updateFilter(_ newFilter: SearchFilter) {

@@ -10,6 +10,32 @@ struct FilterSheetView: View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 24) {
+                    // Time
+                    filterSection("Time") {
+                        HStack(spacing: 8) {
+                            ForEach(TimeFilter.allCases) { option in
+                                Button {
+                                    localFilter.timeFilter = option
+                                } label: {
+                                    HStack(spacing: 6) {
+                                        Image(systemName: option.icon).font(.system(size: 13))
+                                        Text(option.displayName).font(.appCaption)
+                                    }
+                                    .padding(.horizontal, 14)
+                                    .padding(.vertical, 8)
+                                    .background(localFilter.timeFilter == option ? Color.appPrimary : Color.appSurface)
+                                    .foregroundColor(localFilter.timeFilter == option ? .white : .appText)
+                                    .cornerRadius(20)
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 20)
+                                            .stroke(localFilter.timeFilter == option ? Color.clear : Color.appDivider, lineWidth: 1)
+                                    )
+                                }
+                            }
+                            Spacer()
+                        }
+                    }
+
                     // Deal Categories
                     filterSection("Deal Type") {
                         HStack(spacing: 10) {
@@ -282,19 +308,5 @@ struct VenueCategoryButton: View {
                     .stroke(isSelected ? Color.appPrimary : Color.appDivider, lineWidth: 1)
             )
         }
-    }
-}
-
-struct TimePickerField: View {
-    @Binding var time: String
-
-    var body: some View {
-        Text(time.formattedTime)
-            .font(.appSubheadlineSemiBold)
-            .padding(.horizontal, 14)
-            .padding(.vertical, 8)
-            .background(Color.appSurface)
-            .cornerRadius(10)
-            .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.appDivider, lineWidth: 1))
     }
 }

@@ -6,7 +6,6 @@ struct HomeView: View {
     @EnvironmentObject var locationService: LocationService
     @State private var showingFilter = false
     @State private var showingLocationPermission = false
-    @State private var horizonTime: Int? = nil
     @State private var radiusDebounceTask: Task<Void, Never>? = nil
     @State private var isRadiusDebouncing = false
     @State private var showFiltersPanel = true
@@ -28,14 +27,9 @@ struct HomeView: View {
                     resultsHeader
                 }
 
-                // Collapsible filters + horizon panel
-                if showFiltersPanel {
-                    if viewModel.filter.isFiltered {
-                        filterChipsRow
-                    }
-                    if !viewModel.isLoading && !viewModel.filteredVenuesWithDeals.isEmpty {
-                        timeBarRow
-                    }
+                // Collapsible filter chips
+                if showFiltersPanel && viewModel.filter.isFiltered {
+                    filterChipsRow
                 }
 
                 // Main content
@@ -78,9 +72,6 @@ struct HomeView: View {
             } else if status == .denied {
                 showingLocationPermission = true
             }
-        }
-        .onChange(of: horizonTime) { time in
-            viewModel.setScrubTime(time)
         }
     }
 
@@ -235,9 +226,12 @@ struct HomeView: View {
                         .cornerRadius(20)
                 }
 
-                if viewModel.filter.showOnlyActiveNow {
-                    FilterChip(label: "Now", icon: "clock.fill", color: .activeGreen) {
-                        viewModel.filter.showOnlyActiveNow = false
+                // Time filter chip — tap to reset to default (Right Now).
+                if viewModel.filter.timeFilter != .now {
+                    FilterChip(label: viewModel.filter.timeFilter.displayName,
+                               icon: viewModel.filter.timeFilter.icon,
+                               color: .appPrimary) {
+                        viewModel.filter.timeFilter = .now
                         viewModel.applyFilter()
                     }
                 }
@@ -248,13 +242,6 @@ struct HomeView: View {
                             viewModel.filter.categories.remove(cat)
                             viewModel.applyFilter()
                         }
-                    }
-                }
-
-                if viewModel.filter.timeFilter != .anytime {
-                    FilterChip(label: viewModel.filter.timeFilter.displayName, icon: "clock", color: .appPrimary) {
-                        viewModel.filter.timeFilter = .anytime
-                        viewModel.applyFilter()
                     }
                 }
 
@@ -336,26 +323,6 @@ struct HomeView: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 6)
-    }
-
-    // MARK: - Time Bar
-
-    private var timeBarRow: some View {
-        HStack(spacing: 10) {
-            TimeBar(selectedTime: $horizonTime)
-            if horizonTime != nil {
-                Button {
-                    horizonTime = nil
-                } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .font(.system(size: 16))
-                        .foregroundColor(.appSubtext)
-                }
-            }
-        }
-        .padding(.horizontal, 16)
-        .padding(.top, 2)
-        .padding(.bottom, 4)
     }
 
     // MARK: - Deals List

@@ -200,14 +200,6 @@ struct Deal: Codable, Identifiable, Equatable {
 
     var score: Int { upvotes - downvotes }
 
-    /// True when this deal runs today and its window contains `minutes` (minutes since midnight).
-    func isActive(atMinutes minutes: Int) -> Bool {
-        guard days.contains(.today) else { return false }
-        guard let start = timeToMinutes(startTime), let end = timeToMinutes(endTime) else { return false }
-        return start <= end ? (minutes >= start && minutes < end)
-                            : (minutes >= start || minutes < end)
-    }
-
     private func timeToMinutes(_ time: String) -> Int? {
         let parts = time.split(separator: ":").compactMap { Int($0) }
         guard parts.count == 2 else { return nil }
