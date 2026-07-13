@@ -9,6 +9,11 @@ const admin = require("firebase-admin");
 const axios = require("axios");
 const cheerio = require("cheerio");
 
+const { scrapeInstagram }             = require("./extractors/instagram");
+const { scrapeFacebook }              = require("./extractors/facebook");
+const { discoverSocialLinks }         = require("./extractors/discoverSocial");
+const { extractDealsFromSocialPosts } = require("./extractors/socialDeals");
+
 admin.initializeApp();
 const db = admin.firestore();
 
@@ -16,9 +21,11 @@ const db = admin.firestore();
 // SECRETS (Google Cloud Secret Manager via firebase-functions/params)
 // Set with: firebase functions:secrets:set ANTHROPIC_KEY
 //           firebase functions:secrets:set FIRECRAWL_KEY
+//           firebase functions:secrets:set APIFY_TOKEN
 // ============================================================
 const anthropicKey = defineSecret("ANTHROPIC_KEY");
 const firecrawlKey = defineSecret("FIRECRAWL_KEY");
+const apifyToken   = defineSecret("APIFY_TOKEN");
 
 // ============================================================
 // CONSTANTS
@@ -457,6 +464,404 @@ exports.extractDealsFromText = functions
         console.error("extractDealsFromText error:", err.message);
         throw new functions.https.HttpsError("internal", `Extraction failed: ${err.message}`);
       }
+    });
+
+/**
+ * Scrape a venue's Instagram and/or Facebook page via Apify.
+ *
+ * Input:
+ *   {
+ *     instagramHandle: "thelocalatl",              // optional
+ *     facebookURL:     "facebook.com/thelocalatl", // optional (URL or slug)
+ *     maxPosts:        20                          // optional, default 20
+ *   }
+ * Output:
+ *   {
+ *     instagram: { source, handle, posts: [...], error },
+ *     facebook:  { source, pageUrl, posts: [...], error },
+ *     totalPosts: number
+ *   }
+ *
+ * Deal extraction is deliberately NOT run here — returns raw post text so
+ * callers can inspect the output before wiring it into the extraction pipeline.
+ */
+/**
+ * Discover a venue's Instagram + Facebook URLs.
+ *
+ * Input:
+ *   {
+ *     websiteUrl: "https://thelocalatl.com",   // optional but recommended
+ *     venueName:  "The Local",                 // required if you want Google fallback
+ *     city:       "Atlanta",                   // optional
+ *     state:      "GA"                         // optional
+ *   }
+ * Output:
+ *   {
+ *     instagramHandle: "thelocalatl" | null,
+ *     facebookURL:     "https://www.facebook.com/thelocalatl" | null,
+ *     sources:         { instagram: "website"|"google"|null, facebook: same }
+ *   }
+ *
+ * Strategy: scrape the website first (best signal); Google-search via Firecrawl
+ * for anything that isn't in the website's footer/nav.
+ */
+exports.discoverSocialLinks = functions
+    .runWith({
+      timeoutSeconds: 90,
+      memory: "256MB",
+      secrets: [firecrawlKey],
+    })
+    .https.onCall(async (data, context) => {
+      if (!context.auth) {
+        throw new functions.https.HttpsError("unauthenticated", "Must be authenticated.");
+      }
+
+      const { websiteUrl, venueName, city, state } = data || {};
+      if (!websiteUrl && !venueName) {
+        throw new functions.https.HttpsError(
+            "invalid-argument",
+            "At least one of websiteUrl or venueName is required.",
+        );
+      }
+
+      try {
+        const result = await discoverSocialLinks({
+          websiteUrl,
+          venueName,
+          city,
+          state,
+          firecrawlApiKey: firecrawlKey.value(),
+        });
+        console.log(
+            `discoverSocialLinks: venue="${venueName || websiteUrl}"` +
+            ` ig=${result.instagramHandle || "-"}[${result.sources.instagram || "-"}]` +
+            ` fb=${result.facebookURL ? "yes" : "-"}[${result.sources.facebook || "-"}]`,
+        );
+        return result;
+      } catch (err) {
+        console.error("discoverSocialLinks error:", err.message);
+        throw new functions.https.HttpsError("internal", `Discovery failed: ${err.message}`);
+      }
+    });
+
+exports.scrapeSocial = functions
+    .runWith({
+      // Both Apify runs happen in parallel but each can take 60-120s. Add slack.
+      timeoutSeconds: 240,
+      memory: "512MB",
+      secrets: [apifyToken],
+    })
+    .https.onCall(async (data, context) => {
+      if (!context.auth) {
+        throw new functions.https.HttpsError("unauthenticated", "Must be authenticated.");
+      }
+
+      const { instagramHandle, facebookURL, maxPosts } = data || {};
+      if (!instagramHandle && !facebookURL) {
+        throw new functions.https.HttpsError(
+            "invalid-argument",
+            "At least one of instagramHandle or facebookURL is required.",
+        );
+      }
+
+      const APIFY = apifyToken.value();
+      const opts = { apifyToken: APIFY, maxPosts: maxPosts || 20 };
+
+      // Fan out — both extractors return their own error state on failure so
+      // one platform's failure doesn't kill the other.
+      const [instagram, facebook] = await Promise.all([
+        instagramHandle ? scrapeInstagram(instagramHandle, opts)
+                        : Promise.resolve({ source: "instagram", handle: null, posts: [], error: null }),
+        facebookURL     ? scrapeFacebook(facebookURL, opts)
+                        : Promise.resolve({ source: "facebook",  pageUrl: null, posts: [], error: null }),
+      ]);
+
+      console.log(
+          `scrapeSocial: ig=${instagram.posts.length} fb=${facebook.posts.length}` +
+          ` ig_err=${instagram.error || "-"} fb_err=${facebook.error || "-"}`,
+      );
+
+      return {
+        instagram,
+        facebook,
+        totalPosts: instagram.posts.length + facebook.posts.length,
+      };
+    });
+
+/**
+ * End-to-end: scrape a venue's IG and/or FB and extract deals via Claude.
+ *
+ * Input:
+ *   {
+ *     instagramHandle: "thelocalatl",              // optional
+ *     facebookURL:     "facebook.com/thelocalatl", // optional
+ *     maxPosts:        20                          // optional, default 20
+ *   }
+ * Output:
+ *   {
+ *     extractedDeals: [ { title, category, days, startTime, endTime, confidence,
+ *                         startDate, endDate, sourceURL, sourcePlatform } ],
+ *     stats: {
+ *       instagram: { totalPosts, filteredIn, filteredOut, extracted, error },
+ *       facebook:  { same shape },
+ *     }
+ *   }
+ *
+ * Costs one Apify scrape per platform plus one Claude call per platform that has
+ * dealish posts. If pre-filter drops all posts, no Claude call is made.
+ */
+exports.extractDealsFromSocial = functions
+    .runWith({
+      timeoutSeconds: 300,
+      memory: "512MB",
+      secrets: [apifyToken, anthropicKey],
+    })
+    .https.onCall(async (data, context) => {
+      if (!context.auth) {
+        throw new functions.https.HttpsError("unauthenticated", "Must be authenticated.");
+      }
+
+      const { instagramHandle, facebookURL, maxPosts } = data || {};
+      if (!instagramHandle && !facebookURL) {
+        throw new functions.https.HttpsError(
+            "invalid-argument",
+            "At least one of instagramHandle or facebookURL is required.",
+        );
+      }
+
+      const APIFY = apifyToken.value();
+      const ANTHROPIC = anthropicKey.value();
+      const opts = { apifyToken: APIFY, maxPosts: maxPosts || 20 };
+
+      // Step 1 — scrape both platforms in parallel.
+      const [igScrape, fbScrape] = await Promise.all([
+        instagramHandle ? scrapeInstagram(instagramHandle, opts)
+                        : Promise.resolve({ source: "instagram", handle: null, posts: [], error: null }),
+        facebookURL     ? scrapeFacebook(facebookURL, opts)
+                        : Promise.resolve({ source: "facebook",  pageUrl: null, posts: [], error: null }),
+      ]);
+
+      // Step 2 — extract from each platform's posts in parallel.
+      const [igDeals, fbDeals] = await Promise.all([
+        extractDealsFromSocialPosts(igScrape.posts, "instagram", ANTHROPIC),
+        extractDealsFromSocialPosts(fbScrape.posts, "facebook",  ANTHROPIC),
+      ]);
+
+      const extractedDeals = [...igDeals.extractedDeals, ...fbDeals.extractedDeals];
+
+      console.log(
+          `extractDealsFromSocial: ig=${igScrape.posts.length}→${igDeals.postsFilteredIn}→${igDeals.extractedDeals.length}` +
+          ` fb=${fbScrape.posts.length}→${fbDeals.postsFilteredIn}→${fbDeals.extractedDeals.length}`,
+      );
+
+      return {
+        extractedDeals,
+        stats: {
+          instagram: {
+            totalPosts: igScrape.posts.length,
+            filteredIn: igDeals.postsFilteredIn,
+            filteredOut: igDeals.postsFilteredOut,
+            extracted: igDeals.extractedDeals.length,
+            error: igScrape.error,
+          },
+          facebook: {
+            totalPosts: fbScrape.posts.length,
+            filteredIn: fbDeals.postsFilteredIn,
+            filteredOut: fbDeals.postsFilteredOut,
+            extracted: fbDeals.extractedDeals.length,
+            error: fbScrape.error,
+          },
+        },
+      };
+    });
+
+/**
+ * End-to-end venue social scan with Firestore persistence.
+ *
+ * Input: { venueId: string }
+ *
+ * Flow:
+ *   1. Load venue from Firestore.
+ *   2. If instagramHandle / facebookURL missing, run discoverSocialLinks using
+ *      the venue's website + name + city + state, and save whichever it finds
+ *      back onto the venue doc.
+ *   3. Run extractDealsFromSocial against the (possibly newly-discovered) handles.
+ *   4. Save each extracted deal to Firestore with status="pending" so admin
+ *      reviews before it goes live. source="instagram" or "facebook",
+ *      sourceURL=post URL, startDate/expiresAt copied from the candidate.
+ *
+ * Returns: { dealsSaved, discovered: {instagramHandle, facebookURL, sources}, stats }
+ */
+exports.scanVenueSocial = functions
+    .runWith({
+      timeoutSeconds: 420,
+      memory: "512MB",
+      secrets: [firecrawlKey, apifyToken, anthropicKey],
+    })
+    .https.onCall(async (data, context) => {
+      if (!context.auth) {
+        throw new functions.https.HttpsError("unauthenticated", "Must be authenticated.");
+      }
+
+      const { venueId } = data || {};
+      if (!venueId || typeof venueId !== "string") {
+        throw new functions.https.HttpsError("invalid-argument", "venueId required.");
+      }
+
+      // 1. Load venue
+      const venueRef = db.collection("venues").doc(venueId);
+      const snap = await venueRef.get();
+      if (!snap.exists) {
+        throw new functions.https.HttpsError("not-found", `Venue ${venueId} not found.`);
+      }
+      const venue = snap.data() || {};
+
+      // 2. Discover if needed
+      let instagramHandle = venue.instagramHandle || null;
+      let facebookURL     = venue.facebookURL     || null;
+      const alreadyKnown  = { instagram: !!instagramHandle, facebook: !!facebookURL };
+      let discoverySources = { instagram: null, facebook: null };
+
+      if (!instagramHandle || !facebookURL) {
+        try {
+          const discovered = await discoverSocialLinks({
+            websiteUrl: venue.website || null,
+            venueName: venue.name || "",
+            city: venue.city || "",
+            state: venue.state || "",
+            firecrawlApiKey: firecrawlKey.value(),
+          });
+          if (!instagramHandle && discovered.instagramHandle) {
+            instagramHandle = discovered.instagramHandle;
+            discoverySources.instagram = discovered.sources.instagram;
+          }
+          if (!facebookURL && discovered.facebookURL) {
+            facebookURL = discovered.facebookURL;
+            discoverySources.facebook = discovered.sources.facebook;
+          }
+
+          // Persist newly-discovered handles back to the venue doc
+          const venueUpdate = { updatedAt: admin.firestore.Timestamp.now() };
+          if (instagramHandle && !alreadyKnown.instagram) venueUpdate.instagramHandle = instagramHandle;
+          if (facebookURL && !alreadyKnown.facebook)     venueUpdate.facebookURL     = facebookURL;
+          if (Object.keys(venueUpdate).length > 1) {
+            await venueRef.update(venueUpdate);
+          }
+        } catch (err) {
+          console.warn(`scanVenueSocial: discovery failed for ${venueId}: ${err.message}`);
+        }
+      }
+
+      if (!instagramHandle && !facebookURL) {
+        console.log(`scanVenueSocial: ${venueId} no social handles found, nothing to extract`);
+        return {
+          dealsSaved: 0,
+          discovered: { instagramHandle: null, facebookURL: null, sources: discoverySources },
+          stats: null,
+        };
+      }
+
+      // 3. Scrape + extract
+      const APIFY = apifyToken.value();
+      const ANTHROPIC = anthropicKey.value();
+      const opts = { apifyToken: APIFY, maxPosts: 20 };
+
+      const [igScrape, fbScrape] = await Promise.all([
+        instagramHandle ? scrapeInstagram(instagramHandle, opts)
+                        : Promise.resolve({ source: "instagram", handle: null, posts: [], error: null }),
+        facebookURL     ? scrapeFacebook(facebookURL, opts)
+                        : Promise.resolve({ source: "facebook",  pageUrl: null, posts: [], error: null }),
+      ]);
+      const [igDeals, fbDeals] = await Promise.all([
+        extractDealsFromSocialPosts(igScrape.posts, "instagram", ANTHROPIC),
+        extractDealsFromSocialPosts(fbScrape.posts, "facebook",  ANTHROPIC),
+      ]);
+      const candidates = [...igDeals.extractedDeals, ...fbDeals.extractedDeals];
+
+      // 4. Save each candidate as a pending deal
+      const now = admin.firestore.Timestamp.now();
+      const batch = db.batch();
+      let savedCount = 0;
+
+      for (const c of candidates) {
+        if (!c.title || c.title.length < 2) continue;
+        const dealRef = db.collection("deals").doc();
+        const doc = {
+          id: dealRef.id,
+          venueId,
+          venueName: venue.name || "",
+          venueAddress: [venue.address, venue.city, venue.state, venue.zipCode]
+              .filter(Boolean).join(", "),
+          venueLatitude: venue.latitude || 0,
+          venueLongitude: venue.longitude || 0,
+          title: c.title,
+          description: c.description || c.title,
+          category: c.category || "drinks",
+          days: Array.isArray(c.days) ? c.days : [],
+          startTime: c.startTime || "16:00",
+          endTime: c.endTime || "19:00",
+          source: c.sourcePlatform,    // "instagram" | "facebook"
+          status: "pending",           // require admin review before going live
+          isVerified: false,
+          upvotes: 0,
+          downvotes: 0,
+          reportCount: 0,
+          sourceURL: c.sourceURL || null,
+          createdBy: context.auth.uid,
+          createdByName: null,
+          createdAt: now,
+          updatedAt: now,
+          adminNotes: `Extracted from ${c.sourcePlatform}. Confidence ${(c.confidence ?? 0).toFixed(2)}.`,
+        };
+        if (c.startDate) doc.startDate = admin.firestore.Timestamp.fromDate(new Date(c.startDate));
+        if (c.endDate)   doc.expiresAt = admin.firestore.Timestamp.fromDate(new Date(c.endDate));
+
+        batch.set(dealRef, doc);
+        savedCount++;
+      }
+
+      if (savedCount > 0) {
+        await batch.commit();
+        // Bump venue.dealCount so it stays in sync with number of deals.
+        // Note: these are "pending" deals — depending on your UX you may want to
+        // only count active deals. For now, mirror how PVAService.autoScanVenue
+        // increments on save.
+        await venueRef.update({
+          dealCount: admin.firestore.FieldValue.increment(savedCount),
+          updatedAt: admin.firestore.Timestamp.now(),
+        });
+      }
+
+      console.log(
+          `scanVenueSocial: venue=${venueId} discoveredIg=${!!instagramHandle} discoveredFb=${!!facebookURL}` +
+          ` igPosts=${igScrape.posts.length}→extracted=${igDeals.extractedDeals.length}` +
+          ` fbPosts=${fbScrape.posts.length}→extracted=${fbDeals.extractedDeals.length}` +
+          ` saved=${savedCount}`,
+      );
+
+      return {
+        dealsSaved: savedCount,
+        discovered: {
+          instagramHandle,
+          facebookURL,
+          sources: discoverySources,
+          alreadyKnown,
+        },
+        stats: {
+          instagram: {
+            totalPosts: igScrape.posts.length,
+            filteredIn: igDeals.postsFilteredIn,
+            extracted: igDeals.extractedDeals.length,
+            error: igScrape.error,
+          },
+          facebook: {
+            totalPosts: fbScrape.posts.length,
+            filteredIn: fbDeals.postsFilteredIn,
+            extracted: fbDeals.extractedDeals.length,
+            error: fbScrape.error,
+          },
+        },
+      };
     });
 
 function extractDealsWithRegex(text, sourceUrl) {

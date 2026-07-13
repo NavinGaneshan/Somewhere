@@ -1,6 +1,7 @@
 import Foundation
 import CoreLocation
 import FirebaseFirestore
+import FirebaseFunctions
 import UIKit
 
 // MARK: - PVA Result
@@ -239,6 +240,8 @@ actor PVAService {
             placeId: placeVenue.placeId,
             phone: placeVenue.phone,
             website: placeVenue.website,
+            instagramHandle: nil,
+            facebookURL: nil,
             category: placeVenue.venueCategory,
             isPermanentlyClosed: false,
             scanStatus: .pending,
@@ -378,6 +381,7 @@ actor PVAService {
                 createdByName: nil,
                 createdAt: Timestamp(),
                 updatedAt: Timestamp(),
+                startDate: nil,
                 expiresAt: nil,
                 adminNotes: sourceNote
             )
@@ -409,6 +413,29 @@ actor PVAService {
             print("PVAService auto-scan: saved \(savedCount) deal(s) for \(venueName) → \(finalStatus.rawValue)")
         } else {
             print("PVAService auto-scan: \(venueName) found 0 deals (sources: \(sources.isEmpty ? "none" : sources.joined(separator: ", "))) → \(finalStatus.rawValue)")
+        }
+
+        // Fire-and-forget social scan. Does its own discovery, saves handles to the
+        // venue doc, extracts deals, and writes them as pending. Runs after the
+        // main scan finishes so the venue is already visible to users first.
+        Task.detached(priority: .background) {
+            await triggerSocialScan(venueId: venueId, venueName: venueName)
+        }
+    }
+
+    /// Kicks off the scanVenueSocial Cloud Function for a venue.
+    /// Long-running (up to ~5 min) and independent of the main auto-scan path.
+    private static func triggerSocialScan(venueId: String, venueName: String) async {
+        do {
+            let callable = Functions.functions().httpsCallable("scanVenueSocial")
+            callable.timeoutInterval = 420
+            let result = try await callable.call(["venueId": venueId])
+            if let dict = result.data as? [String: Any] {
+                let saved = dict["dealsSaved"] as? Int ?? 0
+                print("PVAService social-scan: \(venueName) → \(saved) pending deal(s)")
+            }
+        } catch {
+            print("PVAService social-scan: \(venueName) failed: \(error.localizedDescription)")
         }
     }
 
