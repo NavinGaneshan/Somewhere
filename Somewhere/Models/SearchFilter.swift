@@ -99,7 +99,10 @@ struct SearchFilter: Equatable {
             searchRadius: 1.0,
             sortOption: .distance,
             showOnlyVerified: false,
-            showOnlyActiveNow: false,
+            // Default to only currently-running deals — this is a happy hour app,
+            // seeing yesterday's or next weekend's deals in the main list is noise.
+            // User can toggle off via the "Now" chip to see everything.
+            showOnlyActiveNow: true,
             showOnlyFavorites: false,
             searchQuery: "",
             locationQuery: ""
@@ -114,13 +117,16 @@ struct SearchFilter: Equatable {
         return f
     }
 
+    // "Filtered" means the current state differs from `.default`. Because the default
+    // is now `showOnlyActiveNow: true`, turning that flag OFF (to browse all deals)
+    // counts as filtering, not on.
     var isFiltered: Bool {
         categories != Self.defaultCategories ||
         !venueCategories.isEmpty ||
         timeFilter != .anytime ||
         !selectedDays.isEmpty ||
         showOnlyVerified ||
-        showOnlyActiveNow ||
+        !showOnlyActiveNow ||
         showOnlyFavorites ||
         !searchQuery.isEmpty ||
         !locationQuery.isEmpty ||
@@ -134,7 +140,7 @@ struct SearchFilter: Equatable {
         if timeFilter != .anytime { count += 1 }
         if !selectedDays.isEmpty { count += 1 }
         if showOnlyVerified { count += 1 }
-        if showOnlyActiveNow { count += 1 }
+        if !showOnlyActiveNow { count += 1 }
         if showOnlyFavorites { count += 1 }
         if !locationQuery.isEmpty { count += 1 }
         if searchRadius != 1.0 { count += 1 }
