@@ -132,6 +132,18 @@ class PlacesService {
 
     private init() {}
 
+    /// GET the URL with the iOS bundle-identifier header attached.
+    /// Google's Places API key is restricted to iOS apps with our bundle ID;
+    /// the restriction only passes when the request carries `X-Ios-Bundle-Identifier`.
+    /// A plain `session.data(from:)` won't include it — hence REQUEST_DENIED.
+    private func fetch(_ url: URL) async throws -> (Data, URLResponse) {
+        var request = URLRequest(url: url)
+        if let bundleId = Bundle.main.bundleIdentifier {
+            request.setValue(bundleId, forHTTPHeaderField: "X-Ios-Bundle-Identifier")
+        }
+        return try await session.data(for: request)
+    }
+
     // MARK: - Nearby Search
 
     /// Search for bars and restaurants near a location
@@ -153,7 +165,7 @@ class PlacesService {
             throw URLError(.badURL)
         }
 
-        let (data, _) = try await session.data(from: url)
+        let (data, _) = try await fetch(url)
         let response = try decoder.decode(PlacesResponse.self, from: data)
 
         print("PlacesService nearbysearch at \(location.latitude),\(location.longitude) r=\(radiusMeters)m → status=\(response.status) results=\(response.results.count)")
@@ -194,7 +206,7 @@ class PlacesService {
             throw URLError(.badURL)
         }
 
-        let (data, _) = try await session.data(from: url)
+        let (data, _) = try await fetch(url)
         let response = try decoder.decode(PlaceDetailsResponse.self, from: data)
 
         guard response.status == "OK" else { return nil }
@@ -225,7 +237,7 @@ class PlacesService {
     func getPlacePhotoReferences(placeId: String, venueName: String = "", limit: Int = 10) async throws -> [String] {
         let urlString = "\(baseURL)/details/json?place_id=\(placeId)&fields=photos&key=\(apiKey)"
         guard let url = URL(string: urlString) else { throw URLError(.badURL) }
-        let (data, _) = try await session.data(from: url)
+        let (data, _) = try await fetch(url)
         let response = try decoder.decode(PlaceDetailsResponse.self, from: data)
         guard response.status == "OK" else { return [] }
         let photos = response.result.photos ?? []
@@ -241,7 +253,7 @@ class PlacesService {
         let urlString = "\(baseURL)/textsearch/json?query=\(encodedName)&location=\(location.latitude),\(location.longitude)&radius=1000&key=\(apiKey)"
 
         guard let url = URL(string: urlString) else { throw URLError(.badURL) }
-        let (data, _) = try await session.data(from: url)
+        let (data, _) = try await fetch(url)
         let response = try decoder.decode(PlacesResponse.self, from: data)
 
         guard response.status == "OK", let first = response.results.first else { return nil }
