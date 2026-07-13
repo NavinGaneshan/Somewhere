@@ -113,6 +113,10 @@ struct SearchFilter: Equatable {
             return false
         }
 
+        // Never show a deal outside its declared active window (event-limited deals
+        // with startDate / expiresAt). Applies regardless of user's time filter.
+        if !deal.isWithinDateRange { return false }
+
         // Time — the single source of truth for time filtering.
         switch timeFilter {
         case .now:

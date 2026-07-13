@@ -204,6 +204,7 @@ class AddDealViewModel: ObservableObject {
                 createdByName: authService.currentUser?.displayName,
                 createdAt: Timestamp(),
                 updatedAt: Timestamp(),
+                startDate: nil,
                 expiresAt: nil,
                 adminNotes: nil
             )
@@ -289,6 +290,7 @@ class AddDealViewModel: ObservableObject {
                     createdByName: authService.currentUser?.displayName,
                     createdAt: Timestamp(),
                     updatedAt: Timestamp(),
+                    startDate: nil,
                     expiresAt: nil,
                     adminNotes: nil
                 )

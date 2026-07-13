@@ -19,7 +19,11 @@ struct ExtractedDeal {
     var suggestedEndTime: String
     var rawText: String
     var confidence: Float
-    var sourceURL: String?   // specific page URL or image URL this deal was found on
+    var sourceURL: String?           // specific page URL or image URL this deal was found on
+    // Time-limited window candidates (from social posts like "beer & shot $10 during Mexico matches"
+    // or "half off apps this Sunday"). Both nil = recurring deal.
+    var suggestedStartDate: Date? = nil
+    var suggestedEndDate: Date? = nil
 }
 
 // MARK: - Photo Scan Service

@@ -105,20 +105,50 @@ enum DayOfWeek: String, Codable, CaseIterable, Identifiable, Comparable {
 }
 
 // MARK: - Deal Source
-enum DealSource: String, Codable {
+enum DealSource: String, Codable, CaseIterable {
     case photo = "photo"
     case website = "website"
+    case instagram = "instagram"
+    case facebook = "facebook"
     case manual = "manual"
     case automated = "automated"
     case userContributed = "user_contributed"
 
     var displayName: String {
         switch self {
-        case .photo: return "Photo Scan"
-        case .website: return "Website Scan"
-        case .manual: return "Manual Entry"
-        case .automated: return "Auto-detected"
+        case .photo:           return "Photo Scan"
+        case .website:         return "Website Scan"
+        case .instagram:       return "Instagram"
+        case .facebook:        return "Facebook"
+        case .manual:          return "Manual Entry"
+        case .automated:       return "Auto-detected"
         case .userContributed: return "User Submitted"
+        }
+    }
+
+    /// SF Symbol name for source badges.
+    var icon: String {
+        switch self {
+        case .photo:           return "camera.fill"
+        case .website:         return "globe"
+        case .instagram:       return "camera.aperture"
+        case .facebook:        return "person.2.wave.2.fill"
+        case .manual:          return "hand.tap.fill"
+        case .automated:       return "sparkles"
+        case .userContributed: return "person.fill.badge.plus"
+        }
+    }
+
+    /// Short label for badges.
+    var shortLabel: String {
+        switch self {
+        case .photo:           return "Photo"
+        case .website:         return "Web"
+        case .instagram:       return "IG"
+        case .facebook:        return "FB"
+        case .manual:          return "Manual"
+        case .automated:       return "Auto"
+        case .userContributed: return "User"
         }
     }
 }
@@ -159,12 +189,28 @@ struct Deal: Codable, Identifiable, Equatable {
     var createdByName: String?
     var createdAt: Timestamp
     var updatedAt: Timestamp
+    // Time-limited deal window. Both optional:
+    //   startDate == nil → active from creation onward
+    //   expiresAt == nil → runs indefinitely
+    // A social-sourced deal like "Beer & Shot $10 during Mexico matches" would carry
+    // the tournament dates as (startDate, expiresAt) so the deal auto-hides after.
+    var startDate: Timestamp?
     var expiresAt: Timestamp?
     var adminNotes: String?
 
     // MARK: - Computed
 
+    /// True when today falls inside [startDate, expiresAt] (either bound nil = unbounded).
+    var isWithinDateRange: Bool {
+        let now = Date()
+        if let start = startDate?.dateValue(), now < start { return false }
+        if let end = expiresAt?.dateValue(), now > end { return false }
+        return true
+    }
+
     var isActiveNow: Bool {
+        guard isWithinDateRange else { return false }
+
         let now = Date()
         let currentDay = DayOfWeek.today
         guard days.contains(currentDay) else { return false }
@@ -270,6 +316,7 @@ extension Deal {
             createdByName: data["createdByName"] as? String,
             createdAt: createdAt,
             updatedAt: updatedAt,
+            startDate: data["startDate"] as? Timestamp,
             expiresAt: data["expiresAt"] as? Timestamp,
             adminNotes: data["adminNotes"] as? String
         )
@@ -302,6 +349,7 @@ extension Deal {
         if let imageURL = imageURL { dict["imageURL"] = imageURL }
         if let sourceURL = sourceURL { dict["sourceURL"] = sourceURL }
         if let createdByName = createdByName { dict["createdByName"] = createdByName }
+        if let startDate = startDate { dict["startDate"] = startDate }
         if let expiresAt = expiresAt { dict["expiresAt"] = expiresAt }
         if let adminNotes = adminNotes { dict["adminNotes"] = adminNotes }
         return dict

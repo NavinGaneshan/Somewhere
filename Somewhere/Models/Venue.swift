@@ -62,6 +62,8 @@ struct Venue: Codable, Identifiable, Equatable {
     var placeId: String           // Google Places ID
     var phone: String?
     var website: String?
+    var instagramHandle: String?   // e.g. "thelocalatl" (no leading @)
+    var facebookURL: String?       // full URL, e.g. "https://www.facebook.com/thelocalatl"
     var category: VenueCategory
     var isPermanentlyClosed: Bool
     var scanStatus: VenueScanStatus
@@ -156,6 +158,8 @@ extension Venue {
             placeId: placeId,
             phone: data["phone"] as? String,
             website: data["website"] as? String,
+            instagramHandle: data["instagramHandle"] as? String,
+            facebookURL: data["facebookURL"] as? String,
             category: category,
             isPermanentlyClosed: data["isPermanentlyClosed"] as? Bool ?? false,
             scanStatus: VenueScanStatus(rawValue: data["scanStatus"] as? String ?? "") ?? .pending,
@@ -193,6 +197,8 @@ extension Venue {
         ]
         if let phone = phone { dict["phone"] = phone }
         if let website = website { dict["website"] = website }
+        if let instagramHandle = instagramHandle { dict["instagramHandle"] = instagramHandle }
+        if let facebookURL = facebookURL { dict["facebookURL"] = facebookURL }
         if let lastScanned = lastScanned { dict["lastScanned"] = lastScanned }
         if let lastVerified = lastVerified { dict["lastVerified"] = lastVerified }
         if let rating = rating { dict["rating"] = rating }
