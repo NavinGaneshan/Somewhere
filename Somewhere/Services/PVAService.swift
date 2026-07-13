@@ -14,6 +14,49 @@ struct PVAResult {
     var error: Error?
 }
 
+// MARK: - Auto-Scan Concurrency Limiter
+/// Caps how many venue auto-scans can run concurrently.
+///
+/// When PVA discovers a batch of new venues (e.g. 12 in one search), firing
+/// autoScanVenue for all of them at once produces 12 simultaneous
+/// httpsCallable requests to `scanWebsite`. The Firebase Functions SDK's
+/// GTMSessionFetcher chokes on the burst and starts sending requests
+/// without auth/App-Check tokens — the server responds UNAUTHENTICATED and
+/// none of the calls even show up in `firebase functions:log`.
+///
+/// Serializing to 3 concurrent scans keeps every callable request properly
+/// authenticated. Total wall-clock is barely affected because Firecrawl +
+/// Claude on each venue take 30–90s regardless.
+private actor AutoScanLimiter {
+    static let shared = AutoScanLimiter()
+    private let maxConcurrent = 3
+    private var available: Int
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    init() {
+        self.available = maxConcurrent
+    }
+
+    func acquire() async {
+        if available > 0 {
+            available -= 1
+            return
+        }
+        await withCheckedContinuation { cont in
+            waiters.append(cont)
+        }
+    }
+
+    func release() {
+        if !waiters.isEmpty {
+            let cont = waiters.removeFirst()
+            cont.resume()
+        } else {
+            available += 1
+        }
+    }
+}
+
 // MARK: - Progressive Venue Addition Service
 /// Core engine that manages the intelligent discovery and deduplication of venues.
 /// Uses a grid-based cell system to avoid redundant API calls.
@@ -285,7 +328,8 @@ actor PVAService {
 
     /// End-to-end auto-scan: fetches the venue's Google details, scans its website (pages + images),
     /// OCRs Google Places photos (owner + user-posted, often including menus), and saves any deals found.
-    /// Static so multiple venues scan in parallel instead of being serialized by the actor.
+    /// Static so many venues can scan in parallel; concurrency is bounded to 3 by AutoScanLimiter to
+    /// keep Firebase Functions from dropping auth tokens under burst load.
     static func autoScanVenue(
         placeId: String,
         venueId: String,
@@ -295,6 +339,13 @@ actor PVAService {
         venueLongitude: Double,
         userId: String
     ) async {
+        // Gate: only 3 auto-scans run at once. Under heavier bursts the Firebase Functions
+        // SDK sends requests without valid auth headers and the server rejects them all
+        // with UNAUTHENTICATED (verified via functions:log showing zero invocations while
+        // the client sees error 16 on every call).
+        await AutoScanLimiter.shared.acquire()
+        defer { Task { await AutoScanLimiter.shared.release() } }
+
         print("PVAService auto-scan: starting \(venueName)")
 
         // 1. Get details (website + all photo references).
