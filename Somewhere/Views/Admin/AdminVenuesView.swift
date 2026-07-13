@@ -234,6 +234,35 @@ struct AdminVenueDetailView: View {
                 .listRowBackground(Color.appSurface)
             }
 
+            // Sources — website + social handles + per-source deal counts
+            Section("Sources") {
+                if let website = venue.website, !website.isEmpty {
+                    sourceRow(icon: "globe", label: "Website", value: website,
+                              count: dealCount(source: .website), color: .appPrimary)
+                }
+                if let ig = venue.instagramHandle, !ig.isEmpty {
+                    sourceRow(icon: "camera.aperture", label: "Instagram", value: "@\(ig)",
+                              count: dealCount(source: .instagram),
+                              color: Color(red: 0.87, green: 0.30, blue: 0.55))
+                }
+                if let fb = venue.facebookURL, !fb.isEmpty {
+                    sourceRow(icon: "person.2.wave.2.fill", label: "Facebook",
+                              value: fb.replacingOccurrences(of: "https://www.facebook.com/", with: "/"),
+                              count: dealCount(source: .facebook),
+                              color: Color(red: 0.26, green: 0.40, blue: 0.70))
+                }
+                if dealCount(source: .photo) > 0 {
+                    sourceRow(icon: "camera.fill", label: "Photo Scans", value: "",
+                              count: dealCount(source: .photo), color: .appAccent)
+                }
+                if venue.website == nil && venue.instagramHandle == nil && venue.facebookURL == nil {
+                    Text("No sources discovered yet — try Rescan.")
+                        .font(.appCaption).foregroundColor(.appSubtext)
+                        .listRowBackground(Color.appSurface)
+                }
+            }
+            .listRowBackground(Color.appSurface)
+
             // Actions
             Section {
                 Button {
@@ -333,5 +362,45 @@ struct AdminVenueDetailView: View {
             }
         }()
         return Text(label).font(.appCaption2).foregroundColor(color)
+    }
+
+    private func dealCount(source: DealSource) -> Int {
+        deals.filter { $0.source == source }.count
+    }
+
+    private func sourceRow(icon: String, label: String, value: String,
+                           count: Int, color: Color) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: icon)
+                .font(.system(size: 14))
+                .foregroundColor(color)
+                .frame(width: 22)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(label).font(.appCaption2).foregroundColor(.appSubtext)
+                if !value.isEmpty {
+                    Text(value)
+                        .font(.appCaption)
+                        .foregroundColor(.appText)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+            }
+
+            Spacer()
+
+            if count > 0 {
+                Text("\(count)")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundColor(color)
+                    .padding(.horizontal, 7).padding(.vertical, 2)
+                    .background(color.opacity(0.15))
+                    .cornerRadius(10)
+            } else {
+                Text("0")
+                    .font(.system(size: 11))
+                    .foregroundColor(.appSubtext)
+            }
+        }
     }
 }

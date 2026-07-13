@@ -1,5 +1,6 @@
 import SwiftUI
 import CoreLocation
+import FirebaseFunctions
 
 struct AdminPVAView: View {
     @EnvironmentObject var viewModel: AdminViewModel
@@ -25,6 +26,23 @@ struct AdminPVAView: View {
     @State private var isGeocodingZip = false
     @State private var zipError: String?
     @State private var showingBulkScanConfirm = false
+
+    // Social Scrape Test (Apify)
+    @State private var testIgHandle: String = ""
+    @State private var testFbUrl: String = ""
+    @State private var isTestingSocial: Bool = false
+    @State private var testSocialResult: String = ""
+    @State private var testSocialError: String?
+
+    // Full Discovery + Extract Test
+    @State private var discoveryVenueName: String = ""
+    @State private var discoveryCity: String = ""
+    @State private var discoveryState: String = ""
+    @State private var discoveryWebsite: String = ""
+    @State private var isRunningDiscovery: Bool = false
+    @State private var discoveryStage: String = ""  // human-readable current step
+    @State private var discoveryResult: String = ""
+    @State private var discoveryError: String?
 
     private var filteredVenues: [Venue] {
         let q = venueSearch.trimmingCharacters(in: .whitespaces).lowercased()
@@ -324,6 +342,111 @@ struct AdminPVAView: View {
                 Text("Deduplication groups venues by Place ID and removes extras, keeping whichever copy has the most deals.")
             }
 
+            // Social Scrape Test (Apify)
+            Section {
+                TextField("Instagram handle (e.g. thelocalatl)", text: $testIgHandle)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                TextField("Facebook URL or slug (optional)", text: $testFbUrl)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+
+                Button {
+                    Task { await runSocialScrapeTest() }
+                } label: {
+                    HStack {
+                        if isTestingSocial {
+                            ProgressView().tint(.appPrimary)
+                            Text("Scraping… (up to 2 min)")
+                        } else {
+                            Image(systemName: "network")
+                            Text("Run Social Scrape")
+                        }
+                    }
+                }
+                .disabled(isTestingSocial || (testIgHandle.trimmingCharacters(in: .whitespaces).isEmpty
+                                              && testFbUrl.trimmingCharacters(in: .whitespaces).isEmpty))
+
+                if let err = testSocialError {
+                    Text(err)
+                        .font(.appCaption)
+                        .foregroundColor(.appError)
+                }
+
+                if !testSocialResult.isEmpty {
+                    ScrollView {
+                        Text(testSocialResult)
+                            .font(.system(size: 11, design: .monospaced))
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(8)
+                    }
+                    .frame(maxHeight: 300)
+                    .background(Color.appSurface)
+                    .cornerRadius(8)
+                }
+            } header: {
+                Text("Social Scrape Test (Apify)")
+            } footer: {
+                Text("Calls the scrapeSocial Cloud Function. Each run costs a few cents in Apify credits and takes 60–120s. Raw post text is shown; no deal extraction is run.")
+            }
+
+            // Full Discovery + Extract
+            Section {
+                TextField("Venue name (e.g. The Local)", text: $discoveryVenueName)
+                    .autocorrectionDisabled()
+                HStack(spacing: 8) {
+                    TextField("City", text: $discoveryCity)
+                        .autocorrectionDisabled()
+                    TextField("State", text: $discoveryState)
+                        .autocorrectionDisabled()
+                        .frame(width: 60)
+                }
+                TextField("Website URL (optional)", text: $discoveryWebsite)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .keyboardType(.URL)
+
+                Button {
+                    Task { await runFullDiscoveryTest() }
+                } label: {
+                    HStack {
+                        if isRunningDiscovery {
+                            ProgressView().tint(.appPrimary)
+                            Text(discoveryStage.isEmpty ? "Working…" : discoveryStage)
+                        } else {
+                            Image(systemName: "sparkle.magnifyingglass")
+                            Text("Discover + Extract Deals")
+                        }
+                    }
+                }
+                .disabled(isRunningDiscovery
+                          || discoveryVenueName.trimmingCharacters(in: .whitespaces).isEmpty)
+
+                if let err = discoveryError {
+                    Text(err)
+                        .font(.appCaption)
+                        .foregroundColor(.appError)
+                }
+
+                if !discoveryResult.isEmpty {
+                    ScrollView {
+                        Text(discoveryResult)
+                            .font(.system(size: 11, design: .monospaced))
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(8)
+                    }
+                    .frame(maxHeight: 400)
+                    .background(Color.appSurface)
+                    .cornerRadius(8)
+                }
+            } header: {
+                Text("Full Discovery + Extract")
+            } footer: {
+                Text("Runs discoverSocialLinks (website scrape + Google fallback) → extractDealsFromSocial (scrape + Claude). Takes up to ~3 min. Venue name is required; website URL is optional but improves discovery accuracy.")
+            }
+
             // Save
             Section {
                 Button {
@@ -427,6 +550,144 @@ struct AdminPVAView: View {
                     }
                 }
             }
+        }
+    }
+
+    // MARK: - Social Scrape Test
+
+    private func runSocialScrapeTest() async {
+        isTestingSocial = true
+        testSocialError = nil
+        testSocialResult = ""
+        defer { isTestingSocial = false }
+
+        var payload: [String: Any] = ["maxPosts": 10]
+        let handle = testIgHandle.trimmingCharacters(in: .whitespaces)
+        let fbUrl  = testFbUrl.trimmingCharacters(in: .whitespaces)
+        if !handle.isEmpty { payload["instagramHandle"] = handle }
+        if !fbUrl.isEmpty  { payload["facebookURL"] = fbUrl }
+
+        do {
+            let callable = Functions.functions().httpsCallable("scrapeSocial")
+            // Server-side timeout is 240s; client default is 70s. Match the server.
+            callable.timeoutInterval = 240
+            let result = try await callable.call(payload)
+
+            if let dict = result.data as? [String: Any] {
+                testSocialResult = prettyPrint(dict)
+                print("=== scrapeSocial result ===\n\(testSocialResult)")
+            } else {
+                testSocialResult = "\(result.data)"
+            }
+        } catch let error as NSError where error.domain == FunctionsErrorDomain {
+            let code = FunctionsErrorCode(rawValue: error.code)?.description ?? "\(error.code)"
+            testSocialError = "Functions error [\(code)]: \(error.localizedDescription)"
+            print("scrapeSocial error: \(testSocialError ?? "")")
+        } catch {
+            testSocialError = error.localizedDescription
+            print("scrapeSocial error: \(error)")
+        }
+    }
+
+    // MARK: - Full Discovery + Extract Test
+
+    private func runFullDiscoveryTest() async {
+        isRunningDiscovery = true
+        discoveryError = nil
+        discoveryResult = ""
+        discoveryStage = ""
+        defer { isRunningDiscovery = false; discoveryStage = "" }
+
+        let venueName = discoveryVenueName.trimmingCharacters(in: .whitespaces)
+        let city      = discoveryCity.trimmingCharacters(in: .whitespaces)
+        let state     = discoveryState.trimmingCharacters(in: .whitespaces)
+        let website   = discoveryWebsite.trimmingCharacters(in: .whitespaces)
+
+        // Step 1 — discover social links
+        discoveryStage = "Discovering social links…"
+        var discoverPayload: [String: Any] = ["venueName": venueName]
+        if !city.isEmpty    { discoverPayload["city"] = city }
+        if !state.isEmpty   { discoverPayload["state"] = state }
+        if !website.isEmpty { discoverPayload["websiteUrl"] = website }
+
+        var discovered: [String: Any] = [:]
+        do {
+            let callable = Functions.functions().httpsCallable("discoverSocialLinks")
+            callable.timeoutInterval = 120
+            let result = try await callable.call(discoverPayload)
+            if let dict = result.data as? [String: Any] { discovered = dict }
+        } catch {
+            discoveryError = "Discovery failed: \(error.localizedDescription)"
+            return
+        }
+
+        let igHandle = (discovered["instagramHandle"] as? String) ?? ""
+        let fbUrl    = (discovered["facebookURL"]     as? String) ?? ""
+
+        if igHandle.isEmpty && fbUrl.isEmpty {
+            discoveryResult = "Discovery result:\n\(prettyPrint(discovered))\n\nNo IG or FB found — nothing to scrape."
+            return
+        }
+
+        // Step 2 — extract deals from whichever platforms were found
+        discoveryStage = "Scraping + extracting deals…"
+        var extractPayload: [String: Any] = ["maxPosts": 20]
+        if !igHandle.isEmpty { extractPayload["instagramHandle"] = igHandle }
+        if !fbUrl.isEmpty    { extractPayload["facebookURL"] = fbUrl }
+
+        do {
+            let callable = Functions.functions().httpsCallable("extractDealsFromSocial")
+            callable.timeoutInterval = 300
+            let result = try await callable.call(extractPayload)
+            if let dict = result.data as? [String: Any] {
+                var combined: [String: Any] = ["discovery": discovered]
+                combined.merge(dict) { _, new in new }
+                discoveryResult = prettyPrint(combined)
+                print("=== Full discovery + extract ===\n\(discoveryResult)")
+            } else {
+                discoveryResult = "\(result.data)"
+            }
+        } catch let error as NSError where error.domain == FunctionsErrorDomain {
+            let code = FunctionsErrorCode(rawValue: error.code)?.description ?? "\(error.code)"
+            discoveryError = "Extract failed [\(code)]: \(error.localizedDescription)"
+        } catch {
+            discoveryError = "Extract failed: \(error.localizedDescription)"
+        }
+    }
+
+    /// JSON-pretty a dictionary for display in the results view.
+    private func prettyPrint(_ obj: Any) -> String {
+        guard let json = try? JSONSerialization.data(
+            withJSONObject: obj,
+            options: [.prettyPrinted, .withoutEscapingSlashes]
+        ), let str = String(data: json, encoding: .utf8) else {
+            return "\(obj)"
+        }
+        return str
+    }
+}
+
+private extension FunctionsErrorCode {
+    var description: String {
+        switch self {
+        case .OK:                 return "ok"
+        case .cancelled:          return "cancelled"
+        case .unknown:            return "unknown"
+        case .invalidArgument:    return "invalid-argument"
+        case .deadlineExceeded:   return "deadline-exceeded"
+        case .notFound:           return "not-found"
+        case .alreadyExists:      return "already-exists"
+        case .permissionDenied:   return "permission-denied"
+        case .resourceExhausted:  return "resource-exhausted"
+        case .failedPrecondition: return "failed-precondition"
+        case .aborted:            return "aborted"
+        case .outOfRange:         return "out-of-range"
+        case .unimplemented:      return "unimplemented"
+        case .internal:           return "internal"
+        case .unavailable:        return "unavailable"
+        case .dataLoss:           return "data-loss"
+        case .unauthenticated:    return "unauthenticated"
+        @unknown default:         return "unknown"
         }
     }
 }

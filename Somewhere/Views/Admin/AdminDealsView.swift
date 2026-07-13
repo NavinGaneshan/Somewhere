@@ -4,9 +4,21 @@ struct AdminDealsView: View {
     @EnvironmentObject var viewModel: AdminViewModel
     @State private var selectedTab = 0
     @State private var searchQuery = ""
+    @State private var sourceFilter: DealSource? = nil   // nil = show all
     @State private var dealToReject: Deal?
     @State private var rejectionNotes = ""
     @State private var showingRejectAlert = false
+
+    /// The deals currently displayed in the active tab (before source filter).
+    private var activeTabDeals: [Deal] {
+        selectedTab == 0 ? viewModel.pendingDeals : viewModel.allDeals
+    }
+
+    /// Counts by source within the active tab, so the picker shows "IG (5)".
+    private var countsBySource: [DealSource: Int] {
+        Dictionary(grouping: activeTabDeals, by: { $0.source })
+            .mapValues { $0.count }
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -16,8 +28,14 @@ struct AdminDealsView: View {
                 Text("All Deals (\(viewModel.allDeals.count))").tag(1)
             }
             .pickerStyle(.segmented)
-            .padding(16)
+            .padding(.horizontal, 16)
+            .padding(.top, 16)
+            .padding(.bottom, 8)
             .background(Color.appBackground)
+
+            // Source filter chips — shown for both tabs
+            sourceFilterRow
+                .background(Color.appBackground)
 
             // Search (for All Deals tab)
             if selectedTab == 1 {
@@ -59,11 +77,62 @@ struct AdminDealsView: View {
         }
     }
 
+    // MARK: - Source Filter
+
+    /// Horizontal chip row of source filters. "All" resets to no filter; each
+    /// source pill shows its count within the active tab.
+    private var sourceFilterRow: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                sourceChip(label: "All", count: activeTabDeals.count,
+                           isSelected: sourceFilter == nil, icon: "square.grid.2x2") {
+                    sourceFilter = nil
+                }
+                ForEach(DealSource.allCases, id: \.self) { src in
+                    let count = countsBySource[src] ?? 0
+                    // Only show chips for sources that actually have deals in this tab.
+                    if count > 0 || sourceFilter == src {
+                        sourceChip(label: src.shortLabel, count: count,
+                                   isSelected: sourceFilter == src, icon: src.icon) {
+                            sourceFilter = (sourceFilter == src) ? nil : src
+                        }
+                    }
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 6)
+        }
+    }
+
+    private func sourceChip(label: String, count: Int, isSelected: Bool,
+                            icon: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 5) {
+                Image(systemName: icon).font(.system(size: 11))
+                Text("\(label) \(count)").font(.appCaption)
+            }
+            .padding(.horizontal, 10).padding(.vertical, 5)
+            .background(isSelected ? Color.appPrimary : Color.appSurface)
+            .foregroundColor(isSelected ? .white : .appText)
+            .cornerRadius(14)
+            .overlay(
+                RoundedRectangle(cornerRadius: 14)
+                    .stroke(isSelected ? Color.clear : Color.appDivider, lineWidth: 1)
+            )
+        }
+    }
+
     // MARK: - Lists
+
+    private func applySourceFilter(_ deals: [Deal]) -> [Deal] {
+        guard let src = sourceFilter else { return deals }
+        return deals.filter { $0.source == src }
+    }
 
     @ViewBuilder
     private var pendingDealsList: some View {
-        if viewModel.pendingDeals.isEmpty {
+        let filtered = applySourceFilter(viewModel.pendingDeals)
+        if filtered.isEmpty {
             Section {
                 HStack {
                     Spacer()
@@ -71,7 +140,7 @@ struct AdminDealsView: View {
                         Image(systemName: "checkmark.circle.fill")
                             .font(.system(size: 40))
                             .foregroundColor(.appSuccess)
-                        Text("All caught up!")
+                        Text(sourceFilter == nil ? "All caught up!" : "No pending \(sourceFilter!.displayName) deals")
                             .font(.appTitle3)
                         Text("No deals pending review")
                             .font(.appSubheadline)
@@ -83,7 +152,7 @@ struct AdminDealsView: View {
             }
             .listRowBackground(Color.appBackground)
         } else {
-            ForEach(viewModel.pendingDeals) { deal in
+            ForEach(filtered) { deal in
                 PendingDealRow(deal: deal) {
                     Task { await viewModel.approveDeal(deal) }
                 } onReject: {
@@ -97,13 +166,14 @@ struct AdminDealsView: View {
 
     @ViewBuilder
     private var allDealsList: some View {
-        let filtered = viewModel.allDeals.filter { deal in
+        let searched = viewModel.allDeals.filter { deal in
             guard !searchQuery.isEmpty else { return true }
             let q = searchQuery.lowercased()
             return deal.title.lowercased().contains(q) ||
                    deal.venueName.lowercased().contains(q) ||
                    deal.description.lowercased().contains(q)
         }
+        let filtered = applySourceFilter(searched)
 
         ForEach(filtered) { deal in
             AdminDealRow(deal: deal) {
@@ -207,9 +277,7 @@ struct PendingDealRow: View {
 
                 Spacer()
 
-                Text(deal.source.displayName)
-                    .font(.appCaption2)
-                    .foregroundColor(.appSubtext)
+                SourceBadge(source: deal.source)
             }
 
             Text(deal.description)
@@ -287,6 +355,7 @@ struct AdminDealCard: View {
                             .font(.appSubheadlineSemiBold)
                             .foregroundColor(.appText)
                         Spacer()
+                        SourceBadge(source: deal.source)
                         dealStatusBadge(deal.status)
                     }
                     Text(deal.venueName)
@@ -344,5 +413,36 @@ struct AdminDealCard: View {
             .background(color.opacity(0.12))
             .foregroundColor(color)
             .cornerRadius(4)
+    }
+}
+
+// MARK: - Source Badge (reusable)
+
+/// Small pill showing where a deal was sourced from.
+/// IG/FB get colored so social-sourced deals stand out at a glance.
+struct SourceBadge: View {
+    let source: DealSource
+
+    private var color: Color {
+        switch source {
+        case .instagram:       return Color(red: 0.87, green: 0.30, blue: 0.55)  // magenta-ish
+        case .facebook:        return Color(red: 0.26, green: 0.40, blue: 0.70)  // fb blue
+        case .website:         return .appPrimary
+        case .photo:           return .appAccent
+        case .manual:          return .appSubtext
+        case .automated:       return .inactiveGray
+        case .userContributed: return .appSuccess
+        }
+    }
+
+    var body: some View {
+        HStack(spacing: 3) {
+            Image(systemName: source.icon).font(.system(size: 8, weight: .semibold))
+            Text(source.shortLabel).font(.system(size: 9, weight: .bold))
+        }
+        .padding(.horizontal, 5).padding(.vertical, 2)
+        .background(color.opacity(0.15))
+        .foregroundColor(color)
+        .cornerRadius(4)
     }
 }
