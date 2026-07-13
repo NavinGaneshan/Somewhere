@@ -144,6 +144,10 @@ struct DealRowView: View {
                 Image(systemName: "camera.fill")
             case .website:
                 Image(systemName: "safari")
+            case .instagram:
+                Image(systemName: "camera.aperture")
+            case .facebook:
+                Image(systemName: "person.2.wave.2.fill")
             case .userContributed:
                 Image(systemName: "person.fill")
             case .automated:
