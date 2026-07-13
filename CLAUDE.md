@@ -71,7 +71,7 @@ Somewhere.xcworkspace             Open this in Xcode (not the .xcodeproj)
 
 2. **`.xcodeproj` is gitignored.** Any edits to `Somewhere.xcodeproj/project.pbxproj` won't be tracked. Changes that need to persist (build settings, device family, version) must go in `project.yml` *and* be applied to the on-disk `.pbxproj` manually until #1 is resolved.
 
-3. **Google Places photos need a header.** The iOS-restricted Places key requires `X-Ios-Bundle-Identifier` in photo requests. SwiftUI's `AsyncImage` doesn't send it. Use the custom `VenuePhotoView` in `Utilities/Extensions.swift` for any Places photo URL, never `AsyncImage` directly.
+3. **Every Google Maps/Places request from iOS needs `X-Ios-Bundle-Identifier`.** The Places key is restricted to `com.hhsomewhere.app` and Google validates that restriction by looking for this header. `URLSession.data(from:)` does NOT set it — always build a `URLRequest`, set `X-Ios-Bundle-Identifier` from `Bundle.main.bundleIdentifier`, and pass to `URLSession.data(for:)`. This bit us twice: for photo URLs (fixed by `VenuePhotoView` in `Utilities/Extensions.swift`) and for nearby/details/textsearch (fixed by `PlacesService.fetch(_:)`). Do NOT use `AsyncImage` for Places photo URLs. The Google SDKs (GooglePlaces, GMSPlacesClient) add the header automatically — this is only a problem when you make raw HTTP calls to `maps.googleapis.com`.
 
 4. **App ID in Apple's portal is Xcode-managed.** Listed as "com hhsomewhere app" in Identifiers; appears as "XC com hhsomewhere app" in App Store Connect dropdowns. The "XC" prefix is informational only — the underlying `com.hhsomewhere.app` works for App Store submission.
 
