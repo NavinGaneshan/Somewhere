@@ -81,6 +81,8 @@ Somewhere.xcworkspace             Open this in Xcode (not the .xcodeproj)
 
 7. **App Check is enforced.** Cloud Functions reject calls from unattested clients. The debug provider is wired up for simulator (in `AppDelegate.swift`); on a real device you may need to add the device's debug token in the Firebase console under App Check.
 
+8. **Firebase Functions SDK drops auth on burst-parallel calls.** Firing 8+ `httpsCallable` requests to the same function URL in one tick makes the SDK send some without valid auth headers, and the server returns `UNAUTHENTICATED` (error 16) — with zero server-side log entries because the SDK bails before the request leaves the device. The GTMSessionFetcher "was already running" warning is the visible tell. `AutoScanLimiter` in `PVAService.swift` caps `autoScanVenue` at 3 concurrent to prevent this. If you add any other fan-out that hits Cloud Functions in parallel, gate it similarly.
+
 ## State of the app
 
 - **v1.0 build 3** submitted to App Store on 2026-05-24. Waiting for review.
