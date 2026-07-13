@@ -822,12 +822,10 @@ exports.scanVenueSocial = functions
 
       if (savedCount > 0) {
         await batch.commit();
-        // Bump venue.dealCount so it stays in sync with number of deals.
-        // Note: these are "pending" deals — depending on your UX you may want to
-        // only count active deals. For now, mirror how PVAService.autoScanVenue
-        // increments on save.
+        // Don't touch venue.dealCount here — approveDeal() in FirestoreService bumps
+        // it when the admin approves each pending deal. Incrementing here too would
+        // double-count. If a pending deal is rejected it never contributes.
         await venueRef.update({
-          dealCount: admin.firestore.FieldValue.increment(savedCount),
           updatedAt: admin.firestore.Timestamp.now(),
         });
       }

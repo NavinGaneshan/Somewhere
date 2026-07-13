@@ -212,8 +212,18 @@ struct Deal: Codable, Identifiable, Equatable {
         guard isWithinDateRange else { return false }
 
         let now = Date()
-        let currentDay = DayOfWeek.today
-        guard days.contains(currentDay) else { return false }
+
+        // Day check. Empty days is only OK if the deal has an explicit date
+        // range — then the range itself scopes when the deal is active and
+        // day-of-week doesn't restrict further. Deals with neither days nor a
+        // date range are too under-specified to call "active now".
+        if !days.isEmpty {
+            let currentDay = DayOfWeek.today
+            guard days.contains(currentDay) else { return false }
+        } else {
+            let hasDateRange = startDate != nil || expiresAt != nil
+            guard hasDateRange else { return false }
+        }
 
         let calendar = Calendar.current
         let hour = calendar.component(.hour, from: now)
