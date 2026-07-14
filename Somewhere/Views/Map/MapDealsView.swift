@@ -20,10 +20,17 @@ struct MapDealsView: View {
                         venueWithDeals: vwd,
                         isSelected: selectedVenueId == vwd.id
                     ) {
-                        withAnimation {
-                            selectedVenueId = selectedVenueId == vwd.id ? nil : vwd.id
+                        // Tapping any pin always selects it — no toggle-off. Users can
+                        // switch between venues by tapping pins directly; the X button
+                        // in the popup dismisses when done. Previous behavior (same-pin
+                        // tap = deselect) confused users into thinking they had to close
+                        // one popup before opening another.
+                        if selectedVenueId != vwd.id {
+                            withAnimation {
+                                selectedVenueId = vwd.id
+                            }
+                            HapticFeedback.impact(.light)
                         }
-                        HapticFeedback.impact(.light)
                     }
                 }
             }
