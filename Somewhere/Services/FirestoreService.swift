@@ -129,6 +129,31 @@ class FirestoreService {
         return Int(truncating: snapshot.count)
     }
 
+    /// Fetch every non-closed venue in the database, page by page. Used by admin
+    /// bulk-rescan flows so we can loop over every venue without any geo filter.
+    /// Firestore's default query has no hard limit but we cap total for safety.
+    func getAllOpenVenues(maxTotal: Int = 5000) async throws -> [Venue] {
+        var results: [Venue] = []
+        let pageSize = 500
+        var lastDoc: DocumentSnapshot? = nil
+
+        while results.count < maxTotal {
+            var query: Query = venuesRef
+                .whereField("isPermanentlyClosed", isEqualTo: false)
+                .order(by: "createdAt", descending: false)
+                .limit(to: pageSize)
+            if let lastDoc = lastDoc {
+                query = query.start(afterDocument: lastDoc)
+            }
+            let snapshot = try await query.getDocuments()
+            if snapshot.documents.isEmpty { break }
+            results += snapshot.documents.compactMap { Venue.fromFirestore($0.data(), id: $0.documentID) }
+            lastDoc = snapshot.documents.last
+            if snapshot.documents.count < pageSize { break }
+        }
+        return results
+    }
+
     // MARK: - Deal Operations
 
     func getDeal(id: String) async throws -> Deal? {
@@ -176,6 +201,47 @@ class FirestoreService {
         return snapshot.documents
             .compactMap { try? $0.data(as: Deal.self) }
             .sorted { $0.createdAt.dateValue() > $1.createdAt.dateValue() }
+    }
+
+    /// Fetch active deals directly by lat/lng bounding box using the denormalized
+    /// venueLatitude/venueLongitude fields on each deal. Preferred over
+    /// getVenuesInBounds + getDealsForVenueIds for the Home/Deals screen because
+    /// the deal set is much smaller than the venue set — a metro with 3000 venues
+    /// might have 300 with active deals, so this query returns ~10x fewer docs.
+    ///
+    /// Requires a composite index on (status ASC, venueLatitude ASC). Firestore
+    /// will log a link to auto-create it the first time this query runs.
+    func getActiveDealsInBounds(
+        minLat: Double, maxLat: Double,
+        minLng: Double, maxLng: Double
+    ) async throws -> [Deal] {
+        let snapshot = try await dealsRef
+            .whereField("status", isEqualTo: DealStatus.active.rawValue)
+            .whereField("venueLatitude", isGreaterThanOrEqualTo: minLat)
+            .whereField("venueLatitude", isLessThanOrEqualTo: maxLat)
+            .limit(to: 5000)
+            .getDocuments()
+
+        let all = snapshot.documents.compactMap { try? $0.data(as: Deal.self) }
+        let inBox = all.filter { $0.venueLongitude >= minLng && $0.venueLongitude <= maxLng }
+        let limitTag = snapshot.documents.count == 5000 ? " — LIMIT HIT" : ""
+        print("FirestoreService.getActiveDealsInBounds: latBand=\(all.count) inBox=\(inBox.count)\(limitTag)")
+        return inBox
+    }
+
+    /// Fetch venue docs for a specific list of IDs. Uses Firestore's `in` operator
+    /// (max 30 per query) chunked when the list exceeds that.
+    func getVenuesByIds(_ ids: [String]) async throws -> [Venue] {
+        guard !ids.isEmpty else { return [] }
+        var venues: [Venue] = []
+        let chunks = ids.chunked(into: 30)
+        for chunk in chunks {
+            let snapshot = try await venuesRef
+                .whereField("id", in: chunk)
+                .getDocuments()
+            venues += snapshot.documents.compactMap { Venue.fromFirestore($0.data(), id: $0.documentID) }
+        }
+        return venues
     }
 
     /// Get all active deals for venues within bounds (fetched after venue geo-query)

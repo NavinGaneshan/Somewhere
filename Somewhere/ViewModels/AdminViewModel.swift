@@ -409,6 +409,56 @@ class AdminViewModel: ObservableObject {
         isLoading = false
     }
 
+    /// Rescan every open venue in the database — full autoScanVenue for each,
+    /// picking up new deals AND populating thumbnails (via the priority chain).
+    /// Throttled by AutoScanLimiter (3 concurrent) so the Firebase Functions
+    /// auth doesn't drop under burst load.
+    ///
+    /// Cost: ~$0.01 per venue (Firecrawl + Places + Apify + Claude).
+    /// Runtime: ~30s per venue effective wall-clock at concurrency=3, so
+    /// 500 venues ≈ 3-4 hours in background. Runs fire-and-forget; admin can
+    /// close the app.
+    func rescanAllVenues(userId: String, onlyMissingThumbnail: Bool = false) async {
+        isLoading = true
+        do {
+            let all = try await firestoreService.getAllOpenVenues(maxTotal: 5000)
+            let candidates = onlyMissingThumbnail
+                ? all.filter { $0.thumbnailURL == nil || $0.thumbnailURL?.isEmpty == true }
+                : all
+
+            guard !candidates.isEmpty else {
+                successMessage = onlyMissingThumbnail
+                    ? "All venues already have a thumbnail."
+                    : "No venues in database."
+                isLoading = false
+                return
+            }
+
+            // Fire all rescans as detached tasks. AutoScanLimiter (3 slots) queues
+            // them naturally so we don't blast Firebase Functions with 500 parallel
+            // callable requests.
+            for venue in candidates {
+                Task.detached {
+                    await PVAService.autoScanVenue(
+                        placeId: venue.placeId,
+                        venueId: venue.id,
+                        venueName: venue.name,
+                        venueAddress: venue.formattedAddress,
+                        venueLatitude: venue.latitude,
+                        venueLongitude: venue.longitude,
+                        userId: userId
+                    )
+                }
+            }
+
+            let mode = onlyMissingThumbnail ? "thumbnail-missing" : "all"
+            successMessage = "Rescanning \(candidates.count) \(mode) venue(s) in background — expect ~30s per venue at concurrency=3."
+        } catch {
+            errorMessage = "Bulk rescan failed: \(error.localizedDescription)"
+        }
+        isLoading = false
+    }
+
     /// Full region refresh: rescan existing venues + discover new ones via Places API.
     func refreshRegion(latitude: Double, longitude: Double, radiusMiles: Double, userId: String) async {
         isLoading = true

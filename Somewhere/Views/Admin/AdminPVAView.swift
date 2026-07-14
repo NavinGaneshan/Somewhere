@@ -38,6 +38,10 @@ struct AdminPVAView: View {
     @State private var isRejectingExpired: Bool = false
     @State private var rejectExpiredResult: String?
 
+    // Bulk rescan of all venues
+    @State private var showingBulkRescanAllConfirm: Bool = false
+    @State private var showingBulkRescanMissingThumbConfirm: Bool = false
+
     // Full Discovery + Extract Test
     @State private var discoveryVenueName: String = ""
     @State private var discoveryCity: String = ""
@@ -248,6 +252,32 @@ struct AdminPVAView: View {
                 Text("Bulk Deal Scan")
             } footer: {
                 Text("Scans up to 50 unscanned or failed venues for deals. Leave ZIP blank to scan any location.")
+            }
+
+            // Full DB Rescan
+            Section {
+                Button {
+                    showingBulkRescanMissingThumbConfirm = true
+                } label: {
+                    HStack {
+                        Image(systemName: "photo.on.rectangle.angled")
+                        Text("Rescan venues missing thumbnails")
+                    }
+                }
+                .foregroundColor(.appPrimary)
+
+                Button(role: .destructive) {
+                    showingBulkRescanAllConfirm = true
+                } label: {
+                    HStack {
+                        Image(systemName: "arrow.clockwise.circle.fill")
+                        Text("Rescan ALL venues (heavy)")
+                    }
+                }
+            } header: {
+                Text("Full DB Rescan")
+            } footer: {
+                Text("The 'missing thumbnails' option is cheap and targeted — good for backfilling after adding new fields. 'Rescan ALL' re-runs Firecrawl + Places + Apify + Claude for every open venue in the database (~$0.01/venue, ~30s/venue at 3-concurrent).")
             }
 
             // Region Refresh
@@ -518,6 +548,24 @@ struct AdminPVAView: View {
             Text(bulkCenter != nil
                  ? "Fires background scans for up to 50 unscanned venues within \(Int(bulkRadius)) miles of ZIP \(bulkZip)."
                  : "Fires background scans for up to 50 unscanned venues regardless of location.")
+        }
+        .confirmationDialog("Rescan venues missing thumbnails?", isPresented: $showingBulkRescanMissingThumbConfirm) {
+            Button("Rescan (cheap)") {
+                guard let uid = authService.currentUser?.id else { return }
+                Task { await viewModel.rescanAllVenues(userId: uid, onlyMissingThumbnail: true) }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Rescans every venue that has no thumbnailURL set. Each takes ~30s at concurrency=3.")
+        }
+        .confirmationDialog("Rescan ALL venues — heavy!", isPresented: $showingBulkRescanAllConfirm) {
+            Button("Rescan All Venues", role: .destructive) {
+                guard let uid = authService.currentUser?.id else { return }
+                Task { await viewModel.rescanAllVenues(userId: uid, onlyMissingThumbnail: false) }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Re-runs Firecrawl + Places + Apify + Claude for EVERY open venue. Est. cost ~$0.01/venue, ~30s/venue at concurrency=3 (so 500 venues ≈ 3-4 hrs in the background). Runs even if app is closed, but progress is not tracked live.")
         }
         .confirmationDialog("Refresh this region?", isPresented: $showingRescanConfirm) {
             Button("Refresh Region") {
