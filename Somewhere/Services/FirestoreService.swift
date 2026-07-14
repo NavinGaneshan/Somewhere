@@ -79,17 +79,27 @@ class FirestoreService {
         minLat: Double, maxLat: Double,
         minLng: Double, maxLng: Double
     ) async throws -> [Venue] {
-        // Filter only by latitude range — compound range+equality queries require a composite
-        // Firestore index that may not exist. Callers filter isPermanentlyClosed in memory.
+        // Firestore forbids range queries on two fields without a composite index, so we
+        // filter latitude in the query and longitude in memory.
+        //
+        // NOTE: at 5-mile radius the latitude band alone spans ~10 mi. In a dense metro
+        // this can contain 1000+ venues, and the previous limit=500 returned a pseudo-
+        // random subset (Firestore's default order is document ID) — often not the ones
+        // near the user's actual longitude. Bumped to 5000 which is effectively unlimited
+        // for a single metro (Atlanta all-in is well under 3000). If a lat band ever
+        // exceeds 5000, switch to geohash-based queries.
         let snapshot = try await venuesRef
             .whereField("latitude", isGreaterThanOrEqualTo: minLat)
             .whereField("latitude", isLessThanOrEqualTo: maxLat)
-            .limit(to: 500)
+            .limit(to: 5000)
             .getDocuments()
 
-        return snapshot.documents
+        let all = snapshot.documents
             .compactMap { Venue.fromFirestore($0.data(), id: $0.documentID) }
-            .filter { $0.longitude >= minLng && $0.longitude <= maxLng }
+        let inBox = all.filter { $0.longitude >= minLng && $0.longitude <= maxLng }
+        let limitTag = snapshot.documents.count == 5000 ? " — LIMIT HIT, switch to geohash" : ""
+        print("FirestoreService.getVenuesInBounds: latBand=\(all.count) inBox=\(inBox.count)\(limitTag)")
+        return inBox
     }
 
     func getVenuesPendingScan(limit: Int = 20) async throws -> [Venue] {
