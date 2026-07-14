@@ -24,7 +24,8 @@ const MAX_POSTS_PER_BATCH = 12;
 // System prompt tuned for social posts. Key differences from the website prompt:
 //   - Emphasizes "usually not a deal, be skeptical"
 //   - Explicitly says to default to []
-//   - Adds startDate/endDate fields for event-limited promotions
+//   - Interprets relative dates ("tomorrow", "wednesday", "this weekend") against
+//     the post date, so one-off event promos become one-day deals not recurring ones
 //   - Says posts are dated so use the timestamp for context
 const SOCIAL_SYSTEM_PROMPT = `You extract happy hour and specials deals from a bar/restaurant's social media posts. Most posts are brand or vibe content — extract nothing from those. Be skeptical. Return ONLY a JSON object.
 
@@ -39,17 +40,68 @@ EXCLUDE:
 • Menu items shown without discount
 • Ongoing brand collaborations without a price
 
-Each post is wrapped in <POST id="X" date="YYYY-MM-DD"> ... </POST>. The id is a stable index — return it as postId with each deal so we know which post produced it.
+Each post is wrapped in <POST id="X" date="YYYY-MM-DD"> ... </POST>. The id is a stable index — return it as postId with each deal so we know which post produced it. The date is the post date; use it as "today" when interpreting relative references.
+
+# RECURRING vs ONE-DAY EVENT — this is critical
+
+A post that mentions a specific day is USUALLY promoting a one-time event, not
+setting up a recurring weekly deal. Assume ONE-DAY unless the language is
+explicitly recurring.
+
+ONE-DAY signals (set startDate = endDate = the specific date, leave days: []):
+  • "today", "tonight", "this evening"           → postDate
+  • "tomorrow", "tomorrow night"                 → postDate + 1
+  • A day name ("wednesday", "this friday",      → the next such day on/after
+    "friday night", "on saturday")                  postDate
+  • "next wednesday"                             → the wednesday one week after
+                                                    the next wednesday
+  • A specific date ("July 15", "7/15", "the      → that exact date, same year
+    15th", "Jul 15")                                as postDate
+  • Event references — "for the Braves game",     → the date of that event; if
+    "watch party", "trivia night", "opening         event date isn't stated,
+    day", concert names, holiday names               use postDate + implied day
+  • "this weekend"                                → startDate = next Saturday,
+                                                    endDate = next Sunday
+  • "through July 15" / "until Aug 1"             → startDate = postDate,
+                                                    endDate = that date
+
+RECURRING signals (set days: [...], omit startDate/endDate):
+  • "every wednesday", "wednesdays", "weekly"
+  • "our monday special", "mondays and tuesdays"
+  • "every day", "daily", "seven days a week"
+  • "weekdays", "weekends"
+  • Generic hours language ("4-7pm every day")
+
+If ambiguous, prefer ONE-DAY (safer — event promos are more common on social).
 
 TITLE: 2–5 words: item + price/discount (e.g. "Wings $6", "House Marg Half Off", "Trivia Night")
 CATEGORY: "drinks", "food", or "activity"
-DAYS: lowercase day names. Empty [] if only a specific date is given.
+DAYS: lowercase day names. Leave empty [] for one-day events (dates carry the timing).
 TIMES: 24-hour "HH:MM". Default 16:00–19:00 for happy hour if hours are unclear but window is implied.
-CONFIDENCE: 0.0–1.0. Social posts should start at 0.5 max; only reach 0.8+ when price, days, AND time are all explicit.
-STARTDATE / ENDDATE (optional): "YYYY-MM-DD". Use when the deal is time-limited (e.g. "through August 31", "during the tournament", "tonight only"). Omit when the deal is recurring or the post doesn't say.
+CONFIDENCE: 0.0–1.0. Social posts should start at 0.5 max; only reach 0.8+ when price and timing are fully explicit.
+STARTDATE / ENDDATE: "YYYY-MM-DD". Required for one-day events. Omit for truly recurring deals.
+
+Examples:
+
+  Post 2026-07-13: "$5 margaritas Tuesday for the Braves game 🌮"
+  → title: "Margarita $5", category: "drinks", days: [],
+     startDate: "2026-07-15", endDate: "2026-07-15"   (next Tuesday)
+
+  Post 2026-07-13: "Every Wednesday: $5 margs all day"
+  → title: "Margarita $5", category: "drinks", days: ["wednesday"],
+     (no startDate/endDate — recurring)
+
+  Post 2026-07-13: "Tonight only — half off apps 6-9pm"
+  → title: "Apps Half Off", category: "food", days: [],
+     startTime: "18:00", endTime: "21:00",
+     startDate: "2026-07-13", endDate: "2026-07-13"
+
+  Post 2026-07-13: "Happy hour 4-7 Mon-Fri, come thru"
+  → title: "Happy Hour", days: ["monday","tuesday","wednesday","thursday","friday"],
+     startTime: "16:00", endTime: "19:00" (no dates — recurring)
 
 Respond with ONLY this JSON, nothing else:
-{"deals":[{"postId":"3","title":"...","description":"...","category":"drinks","days":["monday"],"startTime":"16:00","endTime":"19:00","confidence":0.6,"startDate":"2026-07-12","endDate":"2026-08-31"}]}
+{"deals":[{"postId":"3","title":"...","description":"...","category":"drinks","days":[],"startTime":"16:00","endTime":"19:00","confidence":0.6,"startDate":"2026-07-15","endDate":"2026-07-15"}]}
 
 If nothing qualifies from any post: {"deals":[]}`;
 
@@ -194,7 +246,7 @@ async function extractDealsFromSocialPosts(posts, source, anthropicApiKey) {
 
   const rawDeals = Array.isArray(parsed.deals) ? parsed.deals : [];
   // Attach sourceURL from the post index → post URL map, and mark source platform.
-  const extractedDeals = rawDeals.map((d) => {
+  const mapped = rawDeals.map((d) => {
     const idx = Number(d.postId);
     const post = Number.isFinite(idx) ? batch[idx] : null;
     return {
@@ -210,9 +262,24 @@ async function extractDealsFromSocialPosts(posts, source, anthropicApiKey) {
       sourceURL: post?.url || null,
       sourcePlatform: source,
     };
-  }).filter((d) => d.title && d.title.length >= 2);
+  });
 
-  return { extractedDeals, postsFilteredIn: filteredIn, postsFilteredOut: filteredOut };
+  // Drop deals whose endDate has already passed. This is where "$5 margs Tuesday
+  // for the Braves game" from last week gets filtered out — the prompt tells
+  // Claude to encode single-day events as startDate=endDate, so an expired one-
+  // day event naturally has an endDate strictly before today.
+  const todayISO = new Date().toISOString().split("T")[0];
+  const withoutExpired = mapped.filter((d) => !d.endDate || d.endDate >= todayISO);
+  const expiredCount = mapped.length - withoutExpired.length;
+
+  const extractedDeals = withoutExpired.filter((d) => d.title && d.title.length >= 2);
+
+  return {
+    extractedDeals,
+    postsFilteredIn: filteredIn,
+    postsFilteredOut: filteredOut,
+    expiredCount,
+  };
 }
 
 module.exports = {

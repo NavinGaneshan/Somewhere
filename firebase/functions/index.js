@@ -650,8 +650,11 @@ exports.extractDealsFromSocial = functions
       const extractedDeals = [...igDeals.extractedDeals, ...fbDeals.extractedDeals];
 
       console.log(
-          `extractDealsFromSocial: ig=${igScrape.posts.length}→${igDeals.postsFilteredIn}→${igDeals.extractedDeals.length}` +
-          ` fb=${fbScrape.posts.length}→${fbDeals.postsFilteredIn}→${fbDeals.extractedDeals.length}`,
+          `extractDealsFromSocial: ` +
+          `ig posts=${igScrape.posts.length} dealish=${igDeals.postsFilteredIn} ` +
+          `expired=${igDeals.expiredCount || 0} kept=${igDeals.extractedDeals.length} | ` +
+          `fb posts=${fbScrape.posts.length} dealish=${fbDeals.postsFilteredIn} ` +
+          `expired=${fbDeals.expiredCount || 0} kept=${fbDeals.extractedDeals.length}`,
       );
 
       return {
@@ -661,6 +664,7 @@ exports.extractDealsFromSocial = functions
             totalPosts: igScrape.posts.length,
             filteredIn: igDeals.postsFilteredIn,
             filteredOut: igDeals.postsFilteredOut,
+            expired: igDeals.expiredCount || 0,
             extracted: igDeals.extractedDeals.length,
             error: igScrape.error,
           },
@@ -668,6 +672,7 @@ exports.extractDealsFromSocial = functions
             totalPosts: fbScrape.posts.length,
             filteredIn: fbDeals.postsFilteredIn,
             filteredOut: fbDeals.postsFilteredOut,
+            expired: fbDeals.expiredCount || 0,
             extracted: fbDeals.extractedDeals.length,
             error: fbScrape.error,
           },
@@ -692,6 +697,72 @@ exports.extractDealsFromSocial = functions
  *
  * Returns: { dealsSaved, discovered: {instagramHandle, facebookURL, sources}, stats }
  */
+
+/**
+ * Backlog cleanup: auto-reject pending deals whose expiresAt has already passed.
+ *
+ * When social extraction started dropping expired one-day events at write time,
+ * it left older pending deals (already in Firestore) that missed that filter.
+ * This callable rejects them in a batch so admins don't have to page through
+ * expired promos. Also useful to re-run any time — it's idempotent.
+ *
+ * Input: {} (no parameters)
+ * Output: { rejected: number, scanned: number }
+ */
+exports.rejectExpiredPendingDeals = functions
+    .runWith({ timeoutSeconds: 120, memory: "256MB" })
+    .https.onCall(async (data, context) => {
+      if (!context.auth) {
+        throw new functions.https.HttpsError("unauthenticated", "Must be authenticated.");
+      }
+      // Admin-only. Verify from Firestore users doc.
+      const userDoc = await db.collection("users").doc(context.auth.uid).get();
+      const role = userDoc.data()?.role;
+      if (role !== "admin" && role !== "moderator") {
+        throw new functions.https.HttpsError("permission-denied", "Admins only.");
+      }
+
+      const now = admin.firestore.Timestamp.now();
+      let scanned = 0;
+      let rejected = 0;
+
+      // Chunk through in pages of 200 in case there's a large backlog.
+      // Firestore batch limit is 500; 200 keeps us well under it plus a safety margin.
+      let lastDocId = null;
+      while (true) {
+        let query = db.collection("deals")
+            .where("status", "==", "pending")
+            .where("expiresAt", "<", now)
+            .orderBy("expiresAt")
+            .limit(200);
+        if (lastDocId) {
+          const lastDoc = await db.collection("deals").doc(lastDocId).get();
+          query = query.startAfter(lastDoc);
+        }
+
+        const snap = await query.get();
+        scanned += snap.size;
+        if (snap.empty) break;
+
+        const batch = db.batch();
+        snap.docs.forEach((doc) => {
+          batch.update(doc.ref, {
+            status: "rejected",
+            adminNotes: "Auto-rejected: one-day event date passed before admin review.",
+            updatedAt: admin.firestore.Timestamp.now(),
+          });
+        });
+        await batch.commit();
+        rejected += snap.size;
+
+        if (snap.size < 200) break;
+        lastDocId = snap.docs[snap.size - 1].id;
+      }
+
+      console.log(`rejectExpiredPendingDeals: scanned=${scanned} rejected=${rejected}`);
+      return { scanned, rejected };
+    });
+
 exports.scanVenueSocial = functions
     .runWith({
       timeoutSeconds: 420,
@@ -832,8 +903,8 @@ exports.scanVenueSocial = functions
 
       console.log(
           `scanVenueSocial: venue=${venueId} discoveredIg=${!!instagramHandle} discoveredFb=${!!facebookURL}` +
-          ` igPosts=${igScrape.posts.length}→extracted=${igDeals.extractedDeals.length}` +
-          ` fbPosts=${fbScrape.posts.length}→extracted=${fbDeals.extractedDeals.length}` +
+          ` igPosts=${igScrape.posts.length} igExpired=${igDeals.expiredCount || 0} igKept=${igDeals.extractedDeals.length}` +
+          ` fbPosts=${fbScrape.posts.length} fbExpired=${fbDeals.expiredCount || 0} fbKept=${fbDeals.extractedDeals.length}` +
           ` saved=${savedCount}`,
       );
 
@@ -849,12 +920,14 @@ exports.scanVenueSocial = functions
           instagram: {
             totalPosts: igScrape.posts.length,
             filteredIn: igDeals.postsFilteredIn,
+            expired: igDeals.expiredCount || 0,
             extracted: igDeals.extractedDeals.length,
             error: igScrape.error,
           },
           facebook: {
             totalPosts: fbScrape.posts.length,
             filteredIn: fbDeals.postsFilteredIn,
+            expired: fbDeals.expiredCount || 0,
             extracted: fbDeals.extractedDeals.length,
             error: fbScrape.error,
           },
@@ -1017,21 +1090,39 @@ exports.cleanupExpiredDeals = functions.pubsub
     .timeZone("UTC")
     .onRun(async () => {
       const now = admin.firestore.Timestamp.now();
-      const snap = await db.collection("deals")
+
+      // Active deals with expiresAt in the past → mark expired.
+      const activeSnap = await db.collection("deals")
           .where("expiresAt", "<", now)
           .where("status", "==", "active")
-          .limit(100)
+          .limit(200)
+          .get();
+
+      // Pending deals with expiresAt in the past → auto-reject.
+      // These are social-sourced one-day events (e.g. "$5 margs Tuesday for the
+      // Braves game") whose day passed before an admin got around to reviewing.
+      const pendingSnap = await db.collection("deals")
+          .where("expiresAt", "<", now)
+          .where("status", "==", "pending")
+          .limit(200)
           .get();
 
       const batch = db.batch();
-      snap.docs.forEach((doc) => {
+      const ts = admin.firestore.Timestamp.now();
+
+      activeSnap.docs.forEach((doc) => {
+        batch.update(doc.ref, { status: "expired", updatedAt: ts });
+      });
+      pendingSnap.docs.forEach((doc) => {
         batch.update(doc.ref, {
-          status: "expired",
-          updatedAt: admin.firestore.Timestamp.now(),
+          status: "rejected",
+          adminNotes: "Auto-rejected: one-day event date passed before admin review.",
+          updatedAt: ts,
         });
       });
+
       await batch.commit();
-      console.log(`Marked ${snap.size} deals as expired.`);
+      console.log(`cleanupExpiredDeals: ${activeSnap.size} expired, ${pendingSnap.size} pending auto-rejected.`);
     });
 
 // ============================================================
