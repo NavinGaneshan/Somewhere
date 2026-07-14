@@ -186,10 +186,13 @@ struct HomeView: View {
                             radiusDebounceTask?.cancel()
                             isRadiusDebouncing = false
                         } else {
+                            // Radius may have grown → need a fresh Firestore query to pull
+                            // deals from the newly-visible outer ring. Short debounce so
+                            // rapid slider adjustments coalesce into one query.
                             isRadiusDebouncing = true
                             radiusDebounceTask?.cancel()
                             radiusDebounceTask = Task {
-                                try? await Task.sleep(nanoseconds: 600_000_000)
+                                try? await Task.sleep(nanoseconds: 300_000_000)
                                 guard !Task.isCancelled else { return }
                                 isRadiusDebouncing = false
                                 await viewModel.searchDeals()
@@ -198,6 +201,13 @@ struct HomeView: View {
                     }
                 )
                 .tint(.appPrimary)
+                // Live in-memory refilter as the user drags — deals outside the new
+                // radius disappear instantly so the slider feels responsive. When the
+                // slider is released, onEditingChanged fires a debounced Firestore
+                // fetch to backfill deals from any newly-included outer ring.
+                .onChange(of: viewModel.filter.searchRadius) { _ in
+                    viewModel.applyFilter()
+                }
                 Text("\(String(format: "%.1f", viewModel.filter.searchRadius))mi")
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundColor(.appText)
