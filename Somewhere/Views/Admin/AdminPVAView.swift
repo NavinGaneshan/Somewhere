@@ -34,6 +34,10 @@ struct AdminPVAView: View {
     @State private var testSocialResult: String = ""
     @State private var testSocialError: String?
 
+    // Backlog cleanup: reject expired pending deals
+    @State private var isRejectingExpired: Bool = false
+    @State private var rejectExpiredResult: String?
+
     // Full Discovery + Extract Test
     @State private var discoveryVenueName: String = ""
     @State private var discoveryCity: String = ""
@@ -316,6 +320,34 @@ struct AdminPVAView: View {
                 Text("Deletes all existing deals for a venue and kicks off a fresh website + photo scan.")
             }
 
+            // Maintenance — auto-reject expired pending deals
+            Section {
+                Button {
+                    Task { await runRejectExpiredPending() }
+                } label: {
+                    HStack {
+                        if isRejectingExpired {
+                            ProgressView().tint(.appPrimary)
+                            Text("Rejecting expired pending deals…")
+                        } else {
+                            Image(systemName: "calendar.badge.exclamationmark")
+                            Text("Reject expired pending deals")
+                        }
+                    }
+                }
+                .disabled(isRejectingExpired)
+
+                if let msg = rejectExpiredResult {
+                    Text(msg)
+                        .font(.appCaption)
+                        .foregroundColor(.appSubtext)
+                }
+            } header: {
+                Text("Backlog cleanup")
+            } footer: {
+                Text("Auto-rejects any pending deal whose end date has already passed. Runs nightly automatically; this button is for a one-shot cleanup or if you want the latest count immediately.")
+            }
+
             // Danger Zone
             Section {
                 Button {
@@ -550,6 +582,34 @@ struct AdminPVAView: View {
                     }
                 }
             }
+        }
+    }
+
+    // MARK: - Social Scrape Test
+
+    // MARK: - Backlog: reject expired pending deals
+
+    private func runRejectExpiredPending() async {
+        isRejectingExpired = true
+        rejectExpiredResult = nil
+        defer { isRejectingExpired = false }
+
+        do {
+            let callable = Functions.functions().httpsCallable("rejectExpiredPendingDeals")
+            callable.timeoutInterval = 120
+            let result = try await callable.call([:])
+            if let dict = result.data as? [String: Any] {
+                let scanned = dict["scanned"] as? Int ?? 0
+                let rejected = dict["rejected"] as? Int ?? 0
+                rejectExpiredResult = "Rejected \(rejected) expired pending deal\(rejected == 1 ? "" : "s") (scanned \(scanned))."
+            } else {
+                rejectExpiredResult = "Done."
+            }
+        } catch let error as NSError where error.domain == FunctionsErrorDomain {
+            let code = FunctionsErrorCode(rawValue: error.code)?.description ?? "\(error.code)"
+            rejectExpiredResult = "Failed [\(code)]: \(error.localizedDescription)"
+        } catch {
+            rejectExpiredResult = "Failed: \(error.localizedDescription)"
         }
     }
 
