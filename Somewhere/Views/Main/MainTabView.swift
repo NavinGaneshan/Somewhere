@@ -2,6 +2,11 @@ import SwiftUI
 
 struct MainTabView: View {
     @EnvironmentObject var authService: AuthService
+    // Owned here at the tab-container level so Discover and Map share the same
+    // filter, deals, venues, and last-search location. Each tab used to have its
+    // own @StateObject DealsViewModel, which meant changing a filter on Discover
+    // did not affect Map, and vice versa.
+    @StateObject private var dealsViewModel = DealsViewModel()
     @State private var selectedTab = 0
     @State private var showAddDeal = false
 
@@ -53,6 +58,7 @@ struct MainTabView: View {
             }
         }
         .tint(.appPrimary)
+        .environmentObject(dealsViewModel)
         .onChange(of: selectedTab) { tab in
             if tab == 2 {
                 showAddDeal = true

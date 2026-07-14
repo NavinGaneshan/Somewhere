@@ -2,7 +2,7 @@ import SwiftUI
 import MapKit
 
 struct MapDealsView: View {
-    @StateObject private var viewModel = DealsViewModel()
+    @EnvironmentObject var viewModel: DealsViewModel
     @EnvironmentObject var locationService: LocationService
     @State private var region = MKCoordinateRegion(
         center: CLLocationCoordinate2D(latitude: 33.7890, longitude: -84.3880),
@@ -78,13 +78,20 @@ struct MapDealsView: View {
             }
         }
         .onAppear {
+            // Center the map on the user's location whenever the map appears.
             if let loc = locationService.userLocation {
                 region.center = loc.coordinate
-                Task { await viewModel.searchDeals(at: loc) }
-            } else if locationService.hasPermission {
-                Task { await viewModel.searchDeals() }
-            } else {
+            } else if !locationService.hasPermission {
                 locationService.requestPermission()
+            }
+            // Only trigger a search if we haven't already — the DealsViewModel is
+            // shared with the Discover tab, so avoid re-fetching on every tab switch.
+            if viewModel.lastSearchLocation == nil {
+                if let loc = locationService.userLocation {
+                    Task { await viewModel.searchDeals(at: loc) }
+                } else if locationService.hasPermission {
+                    Task { await viewModel.searchDeals() }
+                }
             }
         }
         .onChange(of: locationService.authorizationStatus) { status in

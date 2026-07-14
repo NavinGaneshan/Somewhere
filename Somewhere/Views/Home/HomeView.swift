@@ -2,7 +2,7 @@ import SwiftUI
 import CoreLocation
 
 struct HomeView: View {
-    @StateObject private var viewModel = DealsViewModel()
+    @EnvironmentObject var viewModel: DealsViewModel
     @EnvironmentObject var locationService: LocationService
     @State private var showingFilter = false
     @State private var showingLocationPermission = false
@@ -60,10 +60,14 @@ struct HomeView: View {
         }
         .onAppear {
             viewModel.loadFavorites()
-            if locationService.hasPermission {
-                Task { await viewModel.searchDeals() }
-            } else {
-                locationService.requestPermission()
+            // Only trigger a search if we haven't already loaded once — the DealsViewModel
+            // is shared with the Map tab, so avoid re-fetching on every tab switch.
+            if viewModel.lastSearchLocation == nil {
+                if locationService.hasPermission {
+                    Task { await viewModel.searchDeals() }
+                } else {
+                    locationService.requestPermission()
+                }
             }
         }
         .onChange(of: locationService.authorizationStatus) { status in
